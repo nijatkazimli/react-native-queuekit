@@ -41,6 +41,9 @@ async function invoke(handler: JobHandler, ctx: JobContext) {
 
 const describe = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+// setTimeout fires immediately for delays above 2^31-1 ms (about 24.8 days).
+const MAX_TIMER_MS = 2 ** 31 - 1;
+
 const SECRET_KEY = /token|password|secret|authorization/i;
 
 // First secret-looking key in a payload, looking a few levels deep.
@@ -352,7 +355,9 @@ export function createQueue(config: QueueConfig): Queue {
       }
       void run(job);
     }
-    if (nextWake !== Infinity) timer = setTimeout(pump, Math.max(0, nextWake - Date.now()));
+    if (nextWake !== Infinity) {
+      timer = setTimeout(pump, Math.min(MAX_TIMER_MS, Math.max(0, nextWake - Date.now())));
+    }
   }
 
   async function run(job: Job) {

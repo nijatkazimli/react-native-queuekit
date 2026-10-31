@@ -395,3 +395,25 @@ describe("handlers", () => {
     await vi.waitFor(() => expect(calls).toEqual(["x"]));
   });
 });
+
+describe("far-future jobs", () => {
+  it("never arms a timer above the 32-bit limit and still runs the job on time", async () => {
+    vi.useFakeTimers();
+    const DAY = 86_400_000;
+    const ran: string[] = [];
+    const queue = createQueue({
+      storage: memoryStorage(),
+      handlers: { t: (payload) => void ran.push(String(payload)) },
+    });
+    const spy = vi.spyOn(globalThis, "setTimeout");
+    queue.enqueue("t", "later", { delayMs: 40 * DAY });
+    await vi.advanceTimersByTimeAsync(30 * DAY);
+    expect(ran).toEqual([]);
+    await vi.advanceTimersByTimeAsync(11 * DAY);
+    expect(ran).toEqual(["later"]);
+    for (const call of spy.mock.calls) expect(call[1] ?? 0).toBeLessThanOrEqual(2 ** 31 - 1);
+    spy.mockRestore();
+    queue.dispose();
+    vi.useRealTimers();
+  });
+});
