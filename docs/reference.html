@@ -1,0 +1,455 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Complete QueueKit API reference: createQueue, every Queue method, React hooks, errors, helpers and all exported types, with defaults." />
+    <title>API reference - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>API reference</h1>
+      <p class="lead">Everything the package exports, with signatures, defaults and behaviour.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Entry point</th><th>Exports</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>@nijatk/react-native-queuekit</code></td>
+              <td>
+                <code>createQueue</code>, <code>memoryStorage</code>, <code>alwaysOnline</code>,
+                <code>netInfoMonitor</code>, <code>flushOnForeground</code>, <code>backoffDelay</code>,
+                <code>DEFAULT_RETRY</code>, <code>parseRetryAfter</code>, <code>Detached</code>,
+                <code>NonRetryableError</code>, <code>RetryAfterError</code>, <code>TimeoutError</code>, and all types
+              </td>
+            </tr>
+            <tr>
+              <td><code>@nijatk/react-native-queuekit/react</code></td>
+              <td><code>QueueProvider</code>, <code>useQueue</code>, <code>useJobs</code>, <code>useJob</code>, <code>useQueueStats</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="functions">Functions</h2>
+
+      <h3 id="createqueue">createQueue</h3>
+      <script type="text/x-code" data-lang="ts">
+function createQueue(config: QueueConfig): Queue
+      </script>
+      <p>
+        Creates a queue. Jobs saved by a previous session are loaded immediately (running jobs are
+        queued to run again, unless detached). Starts processing unless <code>autoStart</code> is
+        <code>false</code>.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Option</th><th>Type</th><th>Default</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>storage</code></td><td><code>QueueStorage</code></td><td><em>required</em></td><td>Where jobs are saved. An MMKV instance works directly.</td></tr>
+            <tr><td><code>name</code></td><td><code>string</code></td><td><code>"default"</code></td><td>Separates queues that share one storage.</td></tr>
+            <tr><td><code>handlers</code></td><td><code>Handlers</code></td><td><code>{}</code></td><td>Handlers registered up front, by job type. Prefer <code>define()</code>.</td></tr>
+            <tr><td><code>network</code></td><td><code>NetworkMonitor</code></td><td><code>alwaysOnline</code></td><td>Connectivity source.</td></tr>
+            <tr><td><code>concurrency</code></td><td><code>number</code></td><td><code>3</code></td><td>Maximum jobs running at once.</td></tr>
+            <tr><td><code>timeoutMs</code></td><td><code>number</code></td><td><code>30000</code></td><td>Per-attempt timeout.</td></tr>
+            <tr><td><code>retry</code></td><td><code>Partial&lt;RetryPolicy&gt;</code></td><td>see <a href="#retrypolicy">RetryPolicy</a></td><td>Backoff settings.</td></tr>
+            <tr><td><code>limits</code></td><td><code>Record&lt;string, TypeLimit&gt;</code></td><td><code>{}</code></td><td>Per-type concurrency and rate limits.</td></tr>
+            <tr><td><code>migrations</code></td><td><code>Record&lt;string, Migration&gt;</code></td><td><code>{}</code></td><td>Payload upgrades, applied once on load.</td></tr>
+            <tr><td><code>autoStart</code></td><td><code>boolean</code></td><td><code>true</code></td><td>Start processing immediately.</td></tr>
+            <tr><td><code>strict</code></td><td><code>boolean</code></td><td><code>true</code>, except when <code>__DEV__</code> is true</td><td>Throw when a job type is defined again with a different handler, instead of silently replacing it. See <a href="jobs.html#duplicate-names">duplicate names</a>.</td></tr>
+            <tr><td><code>maxPayloadBytes</code></td><td><code>number</code></td><td><code>65536</code></td><td>Largest payload (UTF-8 bytes of its JSON) <code>enqueue()</code> accepts; larger ones throw. <code>Infinity</code> disables.</td></tr>
+            <tr><td><code>retention</code></td><td><code>{ maxFailed?, failedTtlMs? }</code></td><td>none</td><td>Delete failed jobs automatically (oldest first beyond <code>maxFailed</code>, or <code>failedTtlMs</code> after failing). Emits <code>removed</code>.</td></tr>
+            <tr><td><code>lease</code></td><td><code>boolean | { ttlMs?: number }</code></td><td><code>false</code></td><td>Let only one instance sharing this storage and name run jobs. See <a href="storage.html#leader-lease">Several instances</a>. <code>ttlMs</code> defaults to 15000.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="memorystorage">memoryStorage</h3>
+      <script type="text/x-code" data-lang="ts">
+function memoryStorage(): QueueStorage
+      </script>
+      <p>In-memory storage. Nothing survives a restart. For tests and previews.</p>
+
+      <h3 id="netinfomonitor">netInfoMonitor and alwaysOnline</h3>
+      <script type="text/x-code" data-lang="ts">
+function netInfoMonitor(netInfo: NetInfoLike): NetworkMonitor
+const alwaysOnline: NetworkMonitor
+      </script>
+      <p>
+        <code>netInfoMonitor</code> adapts <code>@react-native-community/netinfo</code> (pass its default
+        export). Online unless <code>isConnected</code> or <code>isInternetReachable</code> is
+        <code>false</code>. <code>alwaysOnline</code> is the default monitor.
+      </p>
+
+      <h3 id="flushonforeground">flushOnForeground</h3>
+      <script type="text/x-code" data-lang="ts">
+function flushOnForeground(queue: Pick<Queue, "flush">, appState: AppStateLike): () => void
+      </script>
+      <p>Calls <code>queue.flush()</code> whenever the app state becomes <code>"active"</code>. Returns an unsubscribe function.</p>
+
+      <h3 id="backoffdelay">backoffDelay</h3>
+      <script type="text/x-code" data-lang="ts">
+function backoffDelay(attempt: number, policy: RetryPolicy, random?: () => number): number
+      </script>
+      <p>
+        The wait after failure number <code>attempt</code> (1-based):
+        <code>min(maxDelayMs, baseDelayMs * 2^(attempt-1))</code>, jittered to 50% to 100% if enabled.
+        <code>random</code> defaults to <code>Math.random</code>; pass your own for deterministic tests.
+      </p>
+
+      <h3 id="parseretryafter">parseRetryAfter</h3>
+      <script type="text/x-code" data-lang="ts">
+function parseRetryAfter(value: string | null | undefined, now?: number): number | undefined
+      </script>
+      <p>
+        Parses a <code>Retry-After</code> header (seconds or HTTP date) to milliseconds, never negative.
+        Returns <code>undefined</code> for a missing or unparseable value. <code>now</code> defaults to
+        <code>Date.now()</code>.
+      </p>
+
+      <h2 id="queue-methods">Queue methods</h2>
+
+      <h3 id="define">queue.define</h3>
+      <script type="text/x-code" data-lang="ts">
+define<P>(type: string, handler: JobHandler<P>, defaults?: EnqueueOptions): JobFn<P>
+      </script>
+      <p>Registers the handler for <code>type</code> (replacing any previous one) and returns a <a href="#jobfn">JobFn</a> that enqueues it. The payload type <code>P</code> is inferred from the handler. <code>defaults</code> apply to every call; call-site options win.</p>
+
+      <h3 id="handler">queue.handler</h3>
+      <script type="text/x-code" data-lang="ts">
+handler(type: string, defaults?: EnqueueOptions): HandlerDecorator
+      </script>
+      <p>Method decorator (standard TC39). Instance methods register on construction, bound to the instance (last instance wins); <code>static</code> methods register once at class definition. Enqueue with <code>queue.enqueue(method, payload)</code>.</p>
+
+      <h3 id="enqueue">queue.enqueue</h3>
+      <script type="text/x-code" data-lang="ts">
+enqueue(type: string, payload: unknown, options?: EnqueueOptions): Job
+enqueue<P>(method: (payload: P, ctx: JobContext<P>) => unknown, payload: P, options?: EnqueueOptions): Job<P>
+      </script>
+      <p>
+        Saves a job and schedules it. The job is in storage before the call returns. If
+        <code>options.id</code> or <code>options.dedupeKey</code> matches an existing job, that job is
+        returned and nothing is added. The second overload takes a method decorated with
+        <code>@queue.handler</code> and throws if it is not decorated.
+      </p>
+
+      <h3 id="register">queue.register</h3>
+      <script type="text/x-code" data-lang="ts">
+register(type: string, handler: JobHandler): void
+      </script>
+      <p>Lower-level handler registration. Jobs of that type that were waiting for a handler become eligible.</p>
+
+      <h3 id="start">queue.start / queue.stop</h3>
+      <script type="text/x-code" data-lang="ts">
+start(): void
+stop(): void
+      </script>
+      <p><code>start</code> begins processing and subscribes to connectivity changes (idempotent). <code>stop</code> stops picking up jobs and unsubscribes; running jobs finish.</p>
+
+      <h3 id="retry">queue.retry</h3>
+      <script type="text/x-code" data-lang="ts">
+retry(id: string): boolean
+      </script>
+      <p>Requeues a <code>failed</code> job with <code>attempts</code> reset and any <code>expiresAt</code> cleared. Returns <code>false</code> if the job is unknown or not failed.</p>
+
+      <h3 id="remove">queue.remove / queue.clear</h3>
+      <script type="text/x-code" data-lang="ts">
+remove(id: string): boolean
+clear(): void
+      </script>
+      <p><code>remove</code> deletes a job in any state; a running job is aborted through its <code>signal</code>. Returns <code>false</code> if unknown. <code>clear</code> removes every job.</p>
+
+      <h3 id="complete">queue.complete / queue.fail</h3>
+      <script type="text/x-code" data-lang="ts">
+complete(id: string): boolean
+fail(id: string, error?: unknown): boolean
+      </script>
+      <p>Finish a job that was detached with <code>ctx.detach()</code>. <code>complete</code> deletes it and emits <code>completed</code>. <code>fail</code> retries or fails it as if the handler had thrown <code>error</code> (default "External task failed"). Both return <code>false</code> if the job is unknown or not detached.</p>
+
+      <h3 id="flush">queue.flush</h3>
+      <script type="text/x-code" data-lang="ts">
+flush(): void
+      </script>
+      <p>Re-reads connectivity and starts everything due now. Does nothing on a stopped queue.</p>
+
+      <h3 id="drain">queue.drain</h3>
+      <script type="text/x-code" data-lang="ts">
+drain(options?: DrainOptions): Promise<boolean>
+      </script>
+      <p>
+        Flushes, then resolves when no job is running and no job that may start (before the timeout)
+        is waiting. Resolves <code>true</code> when idle, <code>false</code> if <code>timeoutMs</code> elapsed
+        first. Offline-blocked, handler-less and detached jobs are not waited for. A stopped queue is idle.
+      </p>
+
+      <h3 id="getjobs">queue.getJobs</h3>
+      <script type="text/x-code" data-lang="ts">
+getJobs(filter?: JobFilter): Job[]
+      </script>
+      <p>Jobs, oldest first. Without a filter, the same array instance is returned until something changes.</p>
+
+      <h3 id="getstats">queue.getStats</h3>
+      <script type="text/x-code" data-lang="ts">
+getStats(): QueueStats
+      </script>
+      <p>Counts by status. The same object is returned until something changes.</p>
+
+      <h3 id="subscribe">queue.subscribe</h3>
+      <script type="text/x-code" data-lang="ts">
+subscribe(listener: () => void): () => void
+      </script>
+      <p>Calls <code>listener</code> after any change to any job. Returns an unsubscribe function. Compatible with <code>useSyncExternalStore</code>.</p>
+
+      <h3 id="on">queue.on / queue.observe</h3>
+      <script type="text/x-code" data-lang="ts">
+on(event: QueueEvent, listener: (job: Job, error?: unknown) => void): () => void
+observe(listener: (info: QueueEventInfo) => void): () => void
+      </script>
+      <p>
+        <code>on</code> listens to one event. <code>observe</code> receives every event as a
+        <a href="#queueeventinfo">QueueEventInfo</a>, including <code>durationMs</code>. Errors thrown by
+        listeners are swallowed. Both return an unsubscribe function.
+      </p>
+
+      <h3 id="isleader">queue.isLeader</h3>
+      <script type="text/x-code" data-lang="ts">
+isLeader(): boolean
+      </script>
+      <p>Whether this instance may run jobs. Always <code>true</code> without <code>lease</code>; with it, <code>true</code> only while this instance holds the lease (and <code>false</code> before <code>start()</code>).</p>
+
+      <h3 id="dispose">queue.dispose</h3>
+      <script type="text/x-code" data-lang="ts">
+dispose(): void
+      </script>
+      <p>Stops the queue and removes all listeners and observers. Stored jobs are kept.</p>
+
+      <h2 id="react">React (@nijatk/react-native-queuekit/react)</h2>
+      <script type="text/x-code" data-lang="ts">
+function QueueProvider(props: { queue: Queue; children: ReactNode }): JSX.Element
+function useQueue(): Queue
+function useJobs(filter?: JobFilter): Job[]
+function useJob(id: string): Job | undefined
+function useQueueStats(): QueueStats
+      </script>
+      <p>See <a href="react.html">React hooks</a>. <code>useQueue</code> throws outside a <code>QueueProvider</code>.</p>
+
+      <h2 id="classes">Errors and classes</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Class</th><th>Constructor</th><th>Use</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>NonRetryableError</code></td><td><code>new NonRetryableError(message)</code></td><td>Throw to fail a job immediately.</td></tr>
+            <tr><td><code>RetryAfterError</code></td><td><code>new RetryAfterError(delayMs, message?)</code></td><td>Throw to retry after a specific delay. Exposes <code>delayMs</code>. Default message "Retry after Nms".</td></tr>
+            <tr><td><code>TimeoutError</code></td><td><code>new TimeoutError(ms)</code></td><td>Created by the queue when an attempt exceeds <code>timeoutMs</code>.</td></tr>
+            <tr><td><code>Detached</code></td><td><code>new Detached(externalId)</code></td><td>The value <code>ctx.detach()</code> returns. Exposes <code>externalId</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="types">Types</h2>
+
+      <h3 id="job">Job</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Type</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>id</code></td><td><code>string</code></td><td>Unique id. A good idempotency key.</td></tr>
+            <tr><td><code>type</code></td><td><code>string</code></td><td>Selects the handler.</td></tr>
+            <tr><td><code>payload</code></td><td><code>P</code></td><td>JSON data for the handler.</td></tr>
+            <tr><td><code>status</code></td><td><code>JobStatus</code></td><td><code>"pending" | "active" | "failed"</code></td></tr>
+            <tr><td><code>priority</code></td><td><code>number</code></td><td>Higher runs first.</td></tr>
+            <tr><td><code>attempts</code></td><td><code>number</code></td><td>Failed attempts so far (offline requeues are not counted).</td></tr>
+            <tr><td><code>maxAttempts</code></td><td><code>number</code></td><td>Attempts before <code>failed</code>.</td></tr>
+            <tr><td><code>createdAt</code></td><td><code>number</code></td><td>Epoch ms.</td></tr>
+            <tr><td><code>runAt</code></td><td><code>number</code></td><td>Earliest start, epoch ms. Moves forward on each retry.</td></tr>
+            <tr><td><code>requiresNetwork</code></td><td><code>boolean</code></td><td>Waits for connectivity.</td></tr>
+            <tr><td><code>dedupeKey?</code></td><td><code>string</code></td><td>De-duplication key.</td></tr>
+            <tr><td><code>lastError?</code></td><td><code>string</code></td><td>Message of the latest error.</td></tr>
+            <tr><td><code>progress?</code></td><td><code>number</code></td><td>0 to 1 for the current attempt.</td></tr>
+            <tr><td><code>externalId?</code></td><td><code>string</code></td><td>Native task id while detached.</td></tr>
+            <tr><td><code>expiresAt?</code></td><td><code>number</code></td><td>Deadline from <code>ttlMs</code>, epoch ms.</td></tr>
+            <tr><td><code>version?</code></td><td><code>number</code></td><td>Payload version from migrations (missing means 1).</td></tr>
+            <tr><td><code>orderKey?</code></td><td><code>string</code></td><td>Ordering group from <code>orderKey</code>.</td></tr>
+            <tr><td><code>timeoutMs?</code></td><td><code>number</code></td><td>Per-job attempt timeout.</td></tr>
+            <tr><td><code>retry?</code></td><td><code>Partial&lt;RetryPolicy&gt;</code></td><td>Per-job retry settings.</td></tr>
+            <tr><td><code>failedAt?</code></td><td><code>number</code></td><td>When the job failed, epoch ms.</td></tr>
+            <tr><td><code>sensitive?</code></td><td><code>boolean</code></td><td>Payload hidden from listeners.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3 id="jobstatus">JobStatus</h3>
+      <script type="text/x-code" data-lang="ts">
+type JobStatus = "pending" | "active" | "failed"
+      </script>
+
+      <h3 id="enqueueoptions">EnqueueOptions</h3>
+      <script type="text/x-code" data-lang="ts">
+interface EnqueueOptions {
+  id?: string;                // use this id; a job with it already existing is returned
+  priority?: number;          // default 0; higher first
+  maxAttempts?: number;       // default: retry.maxAttempts
+  delayMs?: number;           // default 0
+  ttlMs?: number;             // drop if still pending after this long
+  requiresNetwork?: boolean;  // default true
+  dedupeKey?: string;         // skip if a non-failed job has this key
+  orderKey?: string;          // same key: one at a time, oldest first
+  timeoutMs?: number;         // per-attempt timeout for this job
+  retry?: Partial<RetryPolicy>; // retry settings for this job
+  sensitive?: boolean;        // hide payload from on() / observe()
+}
+      </script>
+
+      <h3 id="jobcontext">JobContext</h3>
+      <script type="text/x-code" data-lang="ts">
+interface JobContext<P = unknown> {
+  job: Job<P>;
+  attempt: number;                 // 1-based
+  signal: AbortSignal;             // aborted on timeout or remove()
+  progress(value: number): void;   // 0..1, clamped, saved on the job
+  detach(externalId: string): Detached;
+}
+      </script>
+
+      <h3 id="jobhandler">JobHandler</h3>
+      <script type="text/x-code" data-lang="ts">
+type JobHandler<P = unknown> = (payload: P, ctx: JobContext<P>) => unknown
+      </script>
+      <p>May be sync, async, or a generator. Return or resolve to succeed; throw to retry.</p>
+
+      <h3 id="jobfn">JobFn</h3>
+      <script type="text/x-code" data-lang="ts">
+interface JobFn<P> {
+  (payload: P, options?: EnqueueOptions): Job<P>;
+  readonly type: string;
+}
+      </script>
+
+      <h3 id="handlerdecorator">HandlerDecorator</h3>
+      <script type="text/x-code" data-lang="ts">
+type HandlerDecorator = <This, Fn extends (this: This, ...args: any[]) => unknown>(
+  method: Fn,
+  context: ClassMethodDecoratorContext<This, Fn>,
+) => void
+      </script>
+
+      <h3 id="handlers-type">Handlers</h3>
+      <script type="text/x-code" data-lang="ts">
+type Handlers = Record<string, JobHandler>
+      </script>
+
+      <h3 id="queueconfig">QueueConfig</h3>
+      <p>The options object of <a href="#createqueue">createQueue</a>.</p>
+
+      <h3 id="typelimit">TypeLimit</h3>
+      <script type="text/x-code" data-lang="ts">
+interface TypeLimit {
+  concurrency?: number;                          // max running at once for this type
+  rate?: { max: number; perMs: number };         // at most `max` starts per rolling window
+}
+      </script>
+
+      <h3 id="migration">Migration</h3>
+      <script type="text/x-code" data-lang="ts">
+interface Migration {
+  version: number;                                              // current payload version
+  migrate(payload: unknown, fromVersion: number): unknown;      // return the upgraded payload
+}
+      </script>
+
+      <h3 id="retrypolicy">RetryPolicy</h3>
+      <script type="text/x-code" data-lang="ts">
+interface RetryPolicy {
+  maxAttempts: number;    // default 5
+  baseDelayMs: number;    // default 1000
+  maxDelayMs: number;     // default 60000
+  jitter: boolean;        // default true
+}
+const DEFAULT_RETRY: RetryPolicy
+      </script>
+
+      <h3 id="queuestats">QueueStats</h3>
+      <script type="text/x-code" data-lang="ts">
+interface QueueStats { pending: number; active: number; failed: number; total: number }
+      </script>
+
+      <h3 id="jobfilter">JobFilter</h3>
+      <script type="text/x-code" data-lang="ts">
+interface JobFilter { status?: JobStatus; type?: string }
+      </script>
+
+      <h3 id="queueevent">QueueEvent</h3>
+      <script type="text/x-code" data-lang="ts">
+type QueueEvent = "enqueued" | "started" | "completed" | "retry" | "failed" | "expired" | "removed" | "requeued"
+      </script>
+
+      <h3 id="queueeventinfo">QueueEventInfo</h3>
+      <script type="text/x-code" data-lang="ts">
+interface QueueEventInfo {
+  event: QueueEvent;
+  job: Job;
+  error?: unknown;       // retry and failed
+  durationMs?: number;   // completed, retry, failed (jobs run in this process)
+}
+      </script>
+
+      <h3 id="drainoptions">DrainOptions</h3>
+      <script type="text/x-code" data-lang="ts">
+interface DrainOptions { timeoutMs?: number }
+      </script>
+
+      <h3 id="queuestorage">QueueStorage</h3>
+      <script type="text/x-code" data-lang="ts">
+interface QueueStorage {
+  getString(key: string): string | undefined;
+  set(key: string, value: string): void;
+  remove(key: string): unknown;
+  getAllKeys(): string[];
+}
+      </script>
+
+      <h3 id="networkmonitor">NetworkMonitor</h3>
+      <script type="text/x-code" data-lang="ts">
+interface NetworkMonitor {
+  isOnline(): boolean;
+  subscribe(listener: (online: boolean) => void): () => void;
+}
+      </script>
+
+      <h3 id="queue-type">Queue</h3>
+      <p>The object <code>createQueue</code> returns. Its methods are listed under <a href="#queue-methods">Queue methods</a>.</p>
+
+      <h2 id="defaults">Defaults at a glance</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Setting</th><th>Default</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Queue name</td><td><code>"default"</code></td></tr>
+            <tr><td>Concurrency</td><td>3</td></tr>
+            <tr><td>Attempt timeout</td><td>30 000 ms</td></tr>
+            <tr><td>Max attempts</td><td>5</td></tr>
+            <tr><td>Backoff base / max</td><td>1 000 ms / 60 000 ms, jitter on</td></tr>
+            <tr><td>Network monitor</td><td><code>alwaysOnline</code></td></tr>
+            <tr><td>Auto start</td><td>true</td></tr>
+            <tr><td>Job priority</td><td>0</td></tr>
+            <tr><td>Job <code>requiresNetwork</code></td><td>true</td></tr>
+            <tr><td>Job <code>delayMs</code></td><td>0</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </article>
+  </body>
+</html>

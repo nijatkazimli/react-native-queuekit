@@ -1,0 +1,327 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="QueueKit recipes for app flows: offline forms, chat, likes, autosave, orders, undo send, sync issues screen, kill switch and more." />
+    <title>Recipes: app flows - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Recipes: app flows</h1>
+      <p class="lead">
+        Copy-and-adapt patterns for common product features. Each one is complete enough to
+        paste, and each calls out the one thing people usually get wrong.
+      </p>
+      <p>
+        The recipes assume a <code>queue</code> from <a href="getting-started.html">Getting started</a>
+        and a small <code>post()</code> helper that sends JSON with an idempotency key and throws
+        <code>NonRetryableError</code> on 4xx (see <a href="recipes-network.html#rest-helper">the REST helper</a>).
+      </p>
+
+      <h2 id="offline-form">Offline-first form</h2>
+      <p>The user fills a long form in a lift with no signal. It must not be lost and should not feel broken.</p>
+      <script type="text/x-code" data-lang="ts" data-title="features/survey.ts">
+export const submitSurvey = queue.define(
+  "submitSurvey",
+  (answers: SurveyAnswers, { job, signal }) => post("/surveys", answers, { key: job.id, signal }),
+  { maxAttempts: 10 },
+);
+      </script>
+      <script type="text/x-code" data-lang="tsx" data-title="SurveyScreen.tsx">
+function onSubmit(answers: SurveyAnswers) {
+  const job = submitSurvey(answers);                 // saved to disk before this returns
+  navigation.replace("Thanks", { jobId: job.id });   // no spinner, no waiting
+}
+
+function ThanksScreen({ route }) {
+  const job = useJob(route.params.jobId);
+  if (!job) return <Text>Sent. Thank you!</Text>;
+  if (job.status === "failed") return <Text>We could not send it: {job.lastError}</Text>;
+  return <Text>Saved. We'll send it as soon as you're online.</Text>;
+}
+      </script>
+      <div class="callout tip">
+        <strong class="label">Why it works</strong>
+        <p>The UI treats "saved" as success. The network is an implementation detail.</p>
+      </div>
+
+      <h2 id="chat">Chat messages</h2>
+      <p>A message needs a stable client id, a visible status and (usually) order.</p>
+      <script type="text/x-code" data-lang="ts" data-title="features/chat.ts">
+type Outgoing = { clientId: string; chatId: string; text: string; seq: number };
+
+export const sendMessage = queue.define(
+  "sendMessage",
+  (m: Outgoing, { signal }) => post("/messages", m, { key: m.clientId, signal }),
+  { priority: 10, maxAttempts: 12 },
+);
+
+export function send(chatId: string, text: string) {
+  const clientId = uuid();
+  const seq = nextSeq(chatId);                                  // a per-chat counter
+  return sendMessage({ clientId, chatId, text, seq }, { id: clientId });   // double tap = one message
+}
+      </script>
+      <script type="text/x-code" data-lang="tsx">
+function Bubble({ clientId, text }: { clientId: string; text: string }) {
+  const job = useJob(clientId);                       // job id === clientId
+  const status = !job ? "sent" : job.status === "failed" ? "failed" : "sending";
+  return (
+    <View>
+      <Text>{text}</Text>
+      <Text>{status}</Text>
+      {status === "failed" && <Button title="Retry" onPress={() => queue.retry(clientId)} />}
+    </View>
+  );
+}
+      </script>
+      <div class="callout warn">
+        <strong class="label">Ordering</strong>
+        <p>
+          If message 1 fails and message 2 succeeds, the server sees 2 before 1. QueueKit orders by
+          priority and time but does not hold later jobs behind a failing one. Include a
+          <code>seq</code> (or client timestamp) and let the server order by it. To make this
+          extremely rare, set <code>limits: { sendMessage: { concurrency: 1 } }</code>.
+        </p>
+      </div>
+
+      <h2 id="likes">Likes and other toggles</h2>
+      <p>The user taps like, unlike, like, unlike. Only the last intent matters.</p>
+      <script type="text/x-code" data-lang="ts">
+type Like = { postId: string; liked: boolean };
+export const setLike = queue.define("setLike", (l: Like, { signal }) =>
+  post(`/posts/${l.postId}/like`, { liked: l.liked }, { signal }));
+
+export function toggleLike(postId: string, liked: boolean) {
+  // Drop any not-yet-sent intent for this post, then queue the newest one.
+  for (const job of queue.getJobs({ type: setLike.type, status: "pending" })) {
+    if ((job.payload as Like).postId === postId) queue.remove(job.id);
+  }
+  return setLike({ postId, liked });
+}
+      </script>
+      <div class="callout note">
+        <strong class="label">Do not use dedupeKey here</strong>
+        <p>
+          <code>dedupeKey</code> would keep the <em>first</em> request and ignore the newer one. For
+          "latest wins", remove the pending one and enqueue the new one. A request already in
+          flight (<code>active</code>) is left alone, and the new job runs after it.
+        </p>
+      </div>
+
+      <h2 id="latest-only">A reusable "latest wins" helper</h2>
+      <p>Autosaving drafts, typing indicators, settings sliders: same problem, so wrap it once.</p>
+      <script type="text/x-code" data-lang="ts" data-title="latestOnly.ts">
+import type { EnqueueOptions, JobFn } from "@nijatk/react-native-queuekit";
+import { queue } from "./queue";
+
+export function latestOnly<P>(job: JobFn<P>, keyOf: (payload: P) => string) {
+  return (payload: P, options?: EnqueueOptions) => {
+    const key = keyOf(payload);
+    for (const pending of queue.getJobs({ type: job.type, status: "pending" })) {
+      if (keyOf(pending.payload as P) === key) queue.remove(pending.id);
+    }
+    return job(payload, options);
+  };
+}
+
+// Usage
+const saveDraftNow = queue.define("saveDraft", (d: Draft, { signal }) => put(`/drafts/${d.id}`, d, { signal }));
+export const saveDraft = latestOnly(saveDraftNow, (d) => d.id);
+
+onChangeText((text) => saveDraft({ id: draftId, text }, { delayMs: 1500 }));   // debounced autosave
+      </script>
+      <p>
+        Because each call removes the previous pending job and starts a new <code>delayMs</code>
+        timer, this is a true debounce: the request is sent 1.5 s after the last keystroke.
+      </p>
+
+      <h2 id="debounce">Throttle: at most one sync pending</h2>
+      <script type="text/x-code" data-lang="ts">
+export const syncAll = queue.define("syncAll", runFullSync);
+
+export function requestSync() {
+  return syncAll({}, { dedupeKey: "syncAll", delayMs: 3000 });
+}
+// Ten calls in a second queue exactly one job, which runs 3 s after the first.
+      </script>
+      <p>
+        Use this when you want to <em>coalesce</em> requests rather than restart a timer. A request
+        made while a sync is already running is absorbed by that run, so changes made after it
+        started wait for the next sync.
+      </p>
+
+      <h2 id="orders">Orders and payments</h2>
+      <p>The classic nightmare is a double charge. Make the order id yours, and the server idempotent.</p>
+      <script type="text/x-code" data-lang="ts" data-title="features/orders.ts">
+export const submitOrder = queue.define(
+  "submitOrder",
+  async (order: Order, { job, signal }) => {
+    const res = await fetch("/orders", {
+      method: "POST",
+      signal,
+      headers: { "Idempotency-Key": order.id, "Content-Type": "application/json" },
+      body: JSON.stringify(order),
+    });
+    if (res.status === 402) throw new NonRetryableError("payment declined");   // do not retry a decline
+    if (res.status >= 400 && res.status < 500 && res.status !== 429) throw new NonRetryableError(`HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  },
+  { maxAttempts: 15, priority: 20 },
+);
+
+export function placeOrder(cart: Cart) {
+  const order = { id: uuid(), ...cart };
+  return submitOrder(order, { id: order.id });           // tapping "Pay" twice yields one job
+}
+      </script>
+      <ul>
+        <li>The id is created once, when the user commits. Retrying or re-enqueueing reuses it.</li>
+        <li>Declines and validation errors are <code>NonRetryableError</code>. Network errors and 5xx retry.</li>
+        <li>Show the order as "processing" from its job: <code>useJob(order.id)</code>.</li>
+      </ul>
+
+      <h2 id="undo-send">Undo send</h2>
+      <p>Delay the job and let the user cancel while it is still pending.</p>
+      <script type="text/x-code" data-lang="tsx">
+const sendEmail = queue.define("sendEmail", deliver);
+
+function onSend(email: Email) {
+  const job = sendEmail(email, { delayMs: 5000 });     // 5 seconds to change your mind
+  showSnackbar("Sending...", { action: "Undo", onPress: () => queue.remove(job.id) });
+}
+      </script>
+      <p>
+        If the job has already started, <code>remove()</code> aborts it through <code>ctx.signal</code>
+        (the request may still reach the server, so keep the idempotency story in mind).
+      </p>
+
+      <h2 id="sync-issues">A "Sync issues" screen</h2>
+      <p>Failed jobs are never silently dropped. Give the user (and your support team) a place to see them.</p>
+      <script type="text/x-code" data-lang="tsx" data-title="SyncIssuesScreen.tsx">
+function SyncIssuesScreen() {
+  const queue = useQueue();
+  const failed = useJobs({ status: "failed" });
+
+  return (
+    <FlatList
+      data={failed}
+      keyExtractor={(j) => j.id}
+      ListHeaderComponent={
+        <Button title="Retry all" onPress={() => { for (const j of failed) queue.retry(j.id); }} />
+      }
+      renderItem={({ item }) => (
+        <View>
+          <Text>{item.type} - {item.attempts} attempts</Text>
+          <Text>{item.lastError}</Text>
+          <Button title="Retry" onPress={() => queue.retry(item.id)} />
+          <Button title="Discard" onPress={() => queue.remove(item.id)} />
+        </View>
+      )}
+      ListEmptyComponent={<Text>Everything is synced.</Text>}
+    />
+  );
+}
+      </script>
+
+      <h2 id="sync-now">"Sync now" button and pull to refresh</h2>
+      <script type="text/x-code" data-lang="ts">
+async function syncNow() {
+  for (const job of queue.getJobs({ status: "failed" })) queue.retry(job.id);   // revive failures
+  queue.flush();                                                                // re-check connectivity
+  return queue.drain({ timeoutMs: 15_000 });                                    // wait, up to 15 s
+}
+
+// <FlatList refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await syncNow(); setRefreshing(false); }} />
+      </script>
+
+      <h2 id="offline-crud">Offline-first CRUD</h2>
+      <p>
+        Write to your local database first so the UI is instant, then enqueue a sync job. The
+        handler reads the <em>current</em> local record, so the server always gets the latest state
+        no matter how many edits happened while offline.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+export const pushNote = queue.define("pushNote", async ({ noteId }: { noteId: string }, { signal }) => {
+  const note = db.notes.get(noteId);                  // read at run time, not from the payload
+  if (!note) return;                                  // deleted meanwhile: nothing to send
+  await api.put(`/notes/${noteId}`, note, { signal });
+});
+const pushNoteLatest = latestOnly(pushNote, (p) => p.noteId);
+
+function editNote(noteId: string, text: string) {
+  db.notes.update(noteId, { text, updatedAt: Date.now() });     // instant UI
+  pushNoteLatest({ noteId });                                   // one pending push per note
+}
+      </script>
+      <p>
+        <code>latestOnly</code> (above) removes a not-yet-started push for the same note before
+        enqueueing, and leaves a push that is already running alone. So an edit made while a push is
+        in flight still gets its own push afterwards. Plain <code>dedupeKey</code> would hand the
+        new edit to the running job, which has already read the old text.
+      </p>
+
+      <h2 id="expiring">Actions that go stale</h2>
+      <script type="text/x-code" data-lang="ts">
+export const checkIn = queue.define("checkIn", (c: { placeId: string }) => api.checkIn(c), {
+  ttlMs: 10 * 60 * 1000,        // meaningless after ten minutes
+  maxAttempts: 3,
+});
+
+queue.on("expired", (job) => {
+  if (job.type === checkIn.type) toast("Check-in expired because you were offline");
+});
+      </script>
+
+      <h2 id="reminders">Delayed follow-ups</h2>
+      <script type="text/x-code" data-lang="ts">
+sendFollowUp({ userId }, { delayMs: 2 * 60 * 60 * 1000 });   // in two hours
+      </script>
+      <div class="callout note">
+        <strong class="label">Not a scheduler</strong>
+        <p>
+          The job runs two hours later only if the app is alive then, or soon after it next opens
+          or is woken. For reminders that must fire at an exact time, use scheduled local
+          notifications instead.
+        </p>
+      </div>
+
+      <h2 id="kill-switch">Remote kill switch and maintenance mode</h2>
+      <script type="text/x-code" data-lang="ts">
+remoteConfig.onChange(({ queueEnabled }) => {
+  if (queueEnabled) queue.start();
+  else queue.stop();            // jobs keep being saved, nothing is sent
+});
+      </script>
+      <p>
+        Useful when your backend is down or a bad release is sending broken requests. Jobs
+        accumulate safely and drain when you flip it back.
+      </p>
+
+      <h2 id="pause-on-cellular">Wi-Fi only</h2>
+      <script type="text/x-code" data-lang="ts">
+import NetInfo from "@react-native-community/netinfo";
+import type { NetworkMonitor } from "@nijatk/react-native-queuekit";
+
+// Treat cellular as offline for heavy jobs by giving them their own queue.
+const wifiOnly: NetworkMonitor = (() => {
+  let online = false;
+  const listeners = new Set<(o: boolean) => void>();
+  NetInfo.addEventListener((s) => {
+    const next = s.type === "wifi" && s.isInternetReachable !== false;
+    if (next === online) return;
+    online = next;
+    for (const l of listeners) l(next);
+  });
+  return { isOnline: () => online, subscribe: (l) => (listeners.add(l), () => listeners.delete(l)) };
+})();
+
+export const bulkUploads = createQueue({ name: "bulk", storage, network: wifiOnly });
+      </script>
+    </article>
+  </body>
+</html>

@@ -1,0 +1,220 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="QueueKit troubleshooting checklist, frequently asked questions, gotchas, why MMKV, comparison with alternatives and non-goals." />
+    <title>FAQ and gotchas - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>FAQ and gotchas</h1>
+      <p class="lead">
+        Troubleshooting checklists, the questions people ask first, the mistakes people make
+        first, and an honest look at what QueueKit is not.
+      </p>
+
+      <h2 id="troubleshooting">Troubleshooting</h2>
+
+      <h3 id="jobs-are-not-running">Jobs are not running</h3>
+      <p>Dump the queue first. It usually answers the question by itself:</p>
+      <script type="text/x-code" data-lang="ts">
+console.table(queue.getJobs().map((j) => ({
+  id: j.id, type: j.type, status: j.status, attempts: `${j.attempts}/${j.maxAttempts}`,
+  startsInMs: j.runAt - Date.now(), net: j.requiresNetwork, error: j.lastError,
+})));
+      </script>
+      <p>Then walk this list in order:</p>
+      <ol>
+        <li><strong>No handler.</strong> Was the module that calls <code>queue.define()</code> imported at startup? Jobs of a type with no handler wait forever. In a background task, did you import your job modules there too?</li>
+        <li><strong>Type name mismatch.</strong> The string passed to <code>define()</code> must equal what was saved. If you renamed it, add an alias handler (<a href="storage.html#migrations">Renaming a job type</a>).</li>
+        <li><strong>The queue is stopped.</strong> <code>autoStart: false</code> or a <code>stop()</code> without a later <code>start()</code>.</li>
+        <li><strong>Offline.</strong> <code>requiresNetwork</code> defaults to true. Is your <code>network</code> monitor reporting what you think? Without one, the queue assumes online.</li>
+        <li><strong>Not due yet.</strong> <code>startsInMs</code> above is positive: a <code>delayMs</code> or a retry backoff. Check <code>attempts</code> and <code>lastError</code>.</li>
+        <li><strong>A limit.</strong> <code>concurrency</code>, <code>limits[type].concurrency</code> or a rate window is full. Jobs wait for a slot.</li>
+        <li><strong>Expired.</strong> A <code>ttlMs</code> elapsed: the job was dropped and an <code>expired</code> event fired.</li>
+        <li><strong>The app is suspended.</strong> JavaScript does not run in the background. See <a href="background.html">Background</a>.</li>
+        <li><strong>Different storage.</strong> A different MMKV <code>id</code> or queue <code>name</code> than before looks like an empty queue.</li>
+        <li><strong>Expo Go.</strong> MMKV needs a development build.</li>
+      </ol>
+
+      <h3 id="jobs-run-twice">Jobs run twice</h3>
+      <ul>
+        <li>
+          <strong>By design: at-least-once.</strong> A job that was running when the app died runs
+          again. Make handlers idempotent and send <code>job.id</code> as an idempotency key.
+        </li>
+        <li>
+          <strong>Two queue instances (Fast Refresh).</strong> Editing the module that calls
+          <code>createQueue</code> during development creates a second queue with the same name on the same
+          storage. Both load the same jobs and both run them. Dispose the previous instance:
+        </li>
+      </ul>
+      <script type="text/x-code" data-lang="ts" data-title="queue.ts">
+const g = globalThis as { __queue?: Queue };
+g.__queue?.dispose();                                    // stop the previous instance on reload
+
+export const queue = (g.__queue = createQueue({ storage, network }));
+      </script>
+      <ul>
+        <li><strong>Two queues, same name.</strong> Give each queue its own <code>name</code>, or create them with <code>lease: true</code> so only one runs jobs at a time (<a href="storage.html#leader-lease">Several instances</a>).</li>
+        <li><strong>Removed a running job.</strong> The request may already have reached the server. Idempotency again.</li>
+      </ul>
+
+      <h3 id="decorators-not-working">Decorators do nothing or fail to compile</h3>
+      <ul>
+        <li>Add <code>@babel/plugin-proposal-decorators</code> with <code>{ version: "2023-11" }</code> to Babel, and restart Metro with <code>--reset-cache</code>.</li>
+        <li>Leave <code>experimentalDecorators</code> <strong>off</strong> in <code>tsconfig.json</code>.</li>
+        <li>Construct the class: instance methods register when an instance is created.</li>
+        <li>If it still fights you, use <code>queue.define()</code>. It needs no setup.</li>
+      </ul>
+
+      <h3 id="wrong-handler">The wrong handler runs for a job</h3>
+      <p>
+        Two <code>define()</code> (or <code>register</code>, or decorated methods) with the same type string: the last
+        one replaces the first, and every job of that type runs through it, with no error. Search your code for the
+        string, and keep <code>strict</code> on (it is the default outside development builds) so a duplicate throws
+        (<a href="jobs.html#duplicate-names">Catching duplicate job names</a>).
+      </p>
+
+      <h3 id="data-changed">My payload came back different</h3>
+      <p>
+        Payloads are JSON. Dates become strings, <code>undefined</code> properties vanish, Maps and class
+        instances flatten. See <a href="jobs.html#payloads">Payload rules</a>.
+      </p>
+
+      <h3 id="timeouts-too-short">Large uploads keep timing out</h3>
+      <p>
+        The default per-attempt timeout is 30 seconds. Raise <code>timeoutMs</code>, split slow work into its
+        own queue, upload in chunks, or hand the transfer to a native uploader with
+        <code>detach()</code>.
+      </p>
+
+      <h3 id="storage-grows">Storage keeps growing</h3>
+      <p>
+        Failed jobs are kept until you act. Surface them in a
+        <a href="recipes-app.html#sync-issues">sync issues screen</a>, retry or discard them, and put
+        <code>ttlMs</code> on low-value jobs so they expire by themselves.
+      </p>
+
+      <h2 id="faq">Common questions</h2>
+
+      <h3>Can I get a job's result?</h3>
+      <p>
+        No. A job has no result: the return value of a handler is ignored. Write the outcome where
+        your app already looks (a database, a cache) from inside the handler, and read it there.
+      </p>
+
+      <h3>Can jobs depend on each other?</h3>
+      <p>
+        Chain them: have a handler enqueue the next step when it finishes
+        (<a href="recipes-network.html#chaining">Chaining</a>), or use the compress-then-upload
+        pattern (<a href="recipes-media.html#pipeline">Pipeline</a>). Give steps deterministic ids so
+        a restart cannot duplicate them.
+      </p>
+
+      <h3>Does it keep order?</h3>
+      <p>
+        Priority, then due time, then creation time. Not across failures: a retrying job lets later ones
+        pass. Use a sequence number on the server for strict order
+        (<a href="recipes-app.html#chat">Chat recipe</a>).
+      </p>
+
+      <h3>Is it encrypted?</h3>
+      <p>
+        Not by default. Payloads are stored as plain JSON in your MMKV instance. Use an MMKV instance with
+        an <code>encryptionKey</code> (<a href="storage.html#secrets">Secrets and tokens</a>), and do not put secrets
+        such as tokens in payloads. Enqueue with <code>sensitive: true</code> to keep a payload out of
+        event listeners and logs; it does not encrypt anything by itself.
+      </p>
+
+      <h3>How many jobs can it hold?</h3>
+      <p>
+        Hundreds to a few thousand is comfortable. Every job is loaded in memory at start-up, and the
+        scheduler scans pending jobs when something changes. For tens of thousands of items, batch them
+        into one job that carries a list or a reference to a local table.
+      </p>
+
+      <h3>Can I use it without React?</h3>
+      <p>Yes. The core (<code>@nijatk/react-native-queuekit</code>) has no React dependency. Hooks live in <code>@nijatk/react-native-queuekit/react</code>.</p>
+
+      <h3>Does it work on web or in tests?</h3>
+      <p>
+        The core is plain TypeScript, so it runs anywhere with a <code>QueueStorage</code>. On the web
+        use a <code>localStorage</code> adapter (<a href="storage.html#storage">Other backends</a>). In tests use
+        <code>memoryStorage()</code>.
+      </p>
+
+      <h3>Does the clock matter?</h3>
+      <p>
+        Delays, backoff and expiry use <code>Date.now()</code> with no protection against clock changes.
+        If the user sets the device time back, waiting jobs wait longer; forward, they fire or expire early.
+        Do not use <code>ttlMs</code> or <code>delayMs</code> for security-critical timing.
+      </p>
+
+      <h3>Can I schedule a job for 9am tomorrow?</h3>
+      <p>
+        With <code>delayMs</code>, yes, but it only runs if the app is alive then (or opens soon after). For exact
+        times use local notifications.
+      </p>
+
+      <h3>Is the API stable?</h3>
+      <p>
+        This is version 0.1. Expect additions, and possibly small changes, before 1.0. Pin the version.
+      </p>
+
+      <h2 id="why-mmkv">Why MMKV and not SQLite or AsyncStorage?</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th></th><th>MMKV</th><th>SQLite</th><th>AsyncStorage</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Access</td><td>Synchronous</td><td>Asynchronous</td><td>Asynchronous</td></tr>
+            <tr><td>Saved when <code>enqueue()</code> returns</td><td>Yes</td><td>Only if you await</td><td>Only if you await</td></tr>
+            <tr><td>Start-up</td><td>Instant, no schema</td><td>Open, migrate, query</td><td>Async load</td></tr>
+            <tr><td>Fit for queue state</td><td>Small, key-addressed records</td><td>Overkill; great for large relational data</td><td>Slow and not designed for hot writes</td></tr>
+            <tr><td>Encryption</td><td>Built in</td><td>Extra library</td><td>No</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        A job queue reads and writes small records by key, very often, and needs each write to be
+        durable before it moves on. That is exactly MMKV's shape. Keep large binary data on disk and
+        queue its path.
+      </p>
+
+      <h2 id="alternatives">How it compares</h2>
+      <p>
+        Not a scoreboard, just a guide to choosing. Details change, so check each project's own docs.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Option</th><th>What it is</th><th>Choose it when</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>QueueKit</td><td>A persistent, network-aware job queue with retries, limits, hooks and native-task handoff.</td><td>You want one reliable outbox for uploads, forms and background work, independent of your data layer.</td></tr>
+            <tr><td>TanStack Query mutations</td><td>Cache and request library with paused, persistable mutations.</td><td>Your app is already built around it and your offline needs are mostly "replay my mutations". Pairs well with QueueKit (<a href="recipes-network.html#tanstack">recipe</a>).</td></tr>
+            <tr><td><code>react-native-job-queue</code></td><td>A React Native job queue library.</td><td>You prefer its worker model. Compare maintenance activity and features first.</td></tr>
+            <tr><td><code>redux-offline</code>, <code>react-native-offline</code></td><td>Redux-centred offline helpers and action queues.</td><td>You are all-in on Redux and want offline handled in reducers and middleware.</td></tr>
+            <tr><td><code>expo-background-task</code>, <code>react-native-background-fetch</code></td><td>OS background wake-ups.</td><td>Complementary: use them to give QueueKit time to <code>drain()</code>.</td></tr>
+            <tr><td>Native uploaders (<code>react-native-background-upload</code> and similar)</td><td>OS-level transfer services.</td><td>Complementary: for big files, <code>detach()</code> to them and let QueueKit track the job.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="non-goals">What QueueKit is not</h2>
+      <ul>
+        <li><strong>Not a server queue.</strong> It does not talk to Redis, SQS or a broker. It lives on the device.</li>
+        <li><strong>Not a scheduler.</strong> It has delays, not cron, and cannot wake a killed app by itself.</li>
+        <li><strong>Not a sync engine.</strong> No conflict resolution, no cross-device state. It reliably delivers your requests; what they mean is up to you.</li>
+        <li><strong>Not a guarantee of exactly-once.</strong> At-least-once, with the tools (ids, idempotency keys) to make repeats harmless.</li>
+        <li><strong>Not a replacement for native background transfers.</strong> It integrates with them.</li>
+      </ul>
+    </article>
+  </body>
+</html>

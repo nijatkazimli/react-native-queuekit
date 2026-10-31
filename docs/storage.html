@@ -1,0 +1,529 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Storage backends, network monitors, payload migrations, multiple queues, logout handling, testing and TypeScript tips for QueueKit." />
+    <title>Storage, network and testing - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Storage, network and testing</h1>
+      <p class="lead">
+        The two pluggable parts of the queue, how payload upgrades work, how to run several queues,
+        and how to test everything.
+      </p>
+
+      <h2 id="storage">Storage</h2>
+      <p>The queue persists jobs through a tiny synchronous interface:</p>
+      <script type="text/x-code" data-lang="ts">
+interface QueueStorage {
+  getString(key: string): string | undefined;
+  set(key: string, value: string): void;
+  remove(key: string): unknown;
+  getAllKeys(): string[];
+}
+      </script>
+      <p>
+        A <code>react-native-mmkv</code> instance already matches it, so you pass it directly.
+        Synchronous is the important word: it lets <code>enqueue()</code> guarantee the job is saved
+        before it returns, and lets the queue load everything at creation with no async start-up.
+      </p>
+
+      <h3>MMKV options</h3>
+      <script type="text/x-code" data-lang="ts">
+import { createMMKV } from "react-native-mmkv";
+
+// A dedicated instance is recommended: the queue scans keys once at startup.
+const storage = createMMKV({ id: "queuekit" });
+
+// Encrypted at rest (payloads may hold personal data). Keep the key in the Keychain/Keystore,
+// never in source code.
+const secure = createMMKV({ id: "queuekit", encryptionKey: key, encryptionType: "AES-256" });
+
+// One instance per signed-in user.
+const perUser = createMMKV({ id: `queuekit-${userId}` });
+      </script>
+      <p>
+        Sharing an instance with other app data works too: the queue only reads keys that start with
+        its own prefix and ignores everything else.
+      </p>
+
+      <h3>What is stored</h3>
+      <p>
+        Each job is one key, <code>queuekit:&lt;queue name&gt;:job:&lt;id&gt;</code>, holding the job as JSON.
+        Updating a job rewrites only that key.
+      </p>
+      <script type="text/x-code" data-lang="json" data-title="queuekit:default:job:mvv7ritt-ctc0okh7">
+{
+  "id": "mvv7ritt-ctc0okh7",
+  "type": "uploadPhoto",
+  "payload": { "uri": "file:///photos/a.jpg", "albumId": "holiday" },
+  "status": "pending",
+  "priority": 5,
+  "attempts": 1,
+  "maxAttempts": 5,
+  "createdAt": 1767225600000,
+  "runAt": 1767225603000,
+  "requiresNetwork": true,
+  "lastError": "HTTP 503"
+}
+      </script>
+
+      <h3 id="secrets">Secrets and tokens</h3>
+      <p>
+        Everything in a payload, tokens included, is saved as plain text in the storage you pass in.
+        It stays there while the job waits, retries or is offline, and after a restart. A completed
+        job is deleted; a <code>failed</code> one keeps its payload until you retry or remove it, or
+        <a href="reference.html#functions"><code>retention</code></a> cleans it up.
+      </p>
+      <p>
+        The best fix is to keep the secret out of the payload and read it when the handler runs. The
+        job then holds nothing sensitive, and a token that expired while the job waited is never reused.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const sendA = queue.define("A", async ({ userId }: { userId: string }) => {
+  const token = await getTokenFromKeychain();   // fresh at run time, never stored in the job
+  await api.a(userId, token);
+});
+
+sendA({ userId });   // payload: { userId } only
+      </script>
+      <p>If a payload really must hold something private:</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Tool</th><th>What it does</th><th>What it does not do</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>MMKV <code>encryptionKey</code></td><td>Encrypts the data on disk.</td><td>Protect the payload in memory, or from your own event listeners.</td></tr>
+            <tr><td><code>sensitive: true</code></td><td>Hides the payload and handler result from <code>on()</code> and <code>observe()</code>, so it cannot reach logs or analytics.</td><td>Encrypt anything. It is still stored as plain JSON unless the storage is encrypted.</td></tr>
+            <tr><td>Development warning</td><td>Logs once when a payload key contains <code>token</code>, <code>password</code>, <code>secret</code> or <code>authorization</code>.</td><td>Run in production builds.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Use both together, and keep the encryption key in the Keychain or Keystore, not in source
+        code. <code>queue.getJobs()</code> and the job returned by <code>enqueue()</code> still show
+        the payload, and error messages in <code>lastError</code> are not redacted.
+      </p>
+
+      <h3>Other backends</h3>
+      <div class="tabs">
+        <div class="tab-list">
+          <button type="button">In memory</button>
+          <button type="button">Web (localStorage)</button>
+          <button type="button">Custom</button>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts">
+import { memoryStorage } from "@nijatk/react-native-queuekit";
+
+const queue = createQueue({ storage: memoryStorage() });   // nothing survives a restart: tests and previews
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts">
+import type { QueueStorage } from "@nijatk/react-native-queuekit";
+
+export const webStorage: QueueStorage = {
+  getString: (key) => localStorage.getItem(key) ?? undefined,
+  set: (key, value) => localStorage.setItem(key, value),
+  remove: (key) => localStorage.removeItem(key),
+  getAllKeys: () => Object.keys(localStorage),
+};
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts">
+// Wrap any store. This one logs writes (handy while debugging).
+function withLogging(inner: QueueStorage): QueueStorage {
+  return {
+    ...inner,
+    set(key, value) {
+      console.log("[queue] set", key);
+      inner.set(key, value);
+    },
+  };
+}
+          </script>
+        </div>
+      </div>
+      <div class="callout warn">
+        <strong class="label">AsyncStorage will not work</strong>
+        <p>
+          Its API is asynchronous. A queue on top of it could not promise that a job is saved when
+          <code>enqueue()</code> returns, so QueueKit does not support it. Any store with the four
+          synchronous methods above does.
+        </p>
+      </div>
+
+      <h2 id="network-monitors">Network monitors</h2>
+      <script type="text/x-code" data-lang="ts">
+interface NetworkMonitor {
+  isOnline(): boolean;
+  subscribe(listener: (online: boolean) => void): () => void;   // returns unsubscribe
+}
+      </script>
+      <ul>
+        <li><code>alwaysOnline</code>: the default. Always online, never emits.</li>
+        <li>
+          <code>netInfoMonitor(NetInfo)</code>: adapts
+          <code>@react-native-community/netinfo</code>. Online unless NetInfo reports
+          <code>isConnected === false</code> or <code>isInternetReachable === false</code>. Assumes
+          online until the first event (NetInfo emits one immediately on subscribe).
+        </li>
+        <li>Anything else: implement the two methods.</li>
+      </ul>
+
+      <h3>Check that your server is really reachable</h3>
+      <p>
+        Wi-Fi without internet (hotels, captive portals) reports as connected. If that matters, probe
+        your own API:
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="reachabilityMonitor.ts">
+import type { NetworkMonitor } from "@nijatk/react-native-queuekit";
+
+export function reachabilityMonitor(url: string, everyMs = 15_000): NetworkMonitor {
+  let online = true;
+  let timer: ReturnType<typeof setInterval> | undefined;
+  const listeners = new Set<(online: boolean) => void>();
+
+  async function check() {
+    let next = false;
+    try {
+      next = (await fetch(url, { method: "HEAD" })).ok;
+    } catch {
+      next = false;
+    }
+    if (next === online) return;
+    online = next;
+    for (const listener of listeners) listener(next);
+  }
+
+  return {
+    isOnline: () => online,
+    subscribe(listener) {
+      listeners.add(listener);
+      if (!timer) timer = setInterval(check, everyMs);   // only polls while someone listens
+      void check();
+      return () => {
+        listeners.delete(listener);
+        if (listeners.size === 0 && timer) {
+          clearInterval(timer);
+          timer = undefined;
+        }
+      };
+    },
+  };
+}
+      </script>
+
+      <h3>Require several signals at once</h3>
+      <script type="text/x-code" data-lang="ts">
+export function allOf(...monitors: NetworkMonitor[]): NetworkMonitor {
+  const isOnline = () => monitors.every((m) => m.isOnline());
+  return {
+    isOnline,
+    subscribe(listener) {
+      const offs = monitors.map((m) => m.subscribe(() => listener(isOnline())));
+      return () => offs.forEach((off) => off());
+    },
+  };
+}
+
+createQueue({ storage, network: allOf(netInfoMonitor(NetInfo), reachabilityMonitor(`${API}/health`)) });
+      </script>
+
+      <h3>A manual switch for QA</h3>
+      <script type="text/x-code" data-lang="ts">
+export function manualMonitor() {
+  let online = true;
+  const listeners = new Set<(online: boolean) => void>();
+  const monitor: NetworkMonitor = {
+    isOnline: () => online,
+    subscribe: (l) => (listeners.add(l), () => listeners.delete(l)),
+  };
+  const set = (value: boolean) => {
+    online = value;
+    for (const l of listeners) l(value);
+  };
+  return { monitor, set };
+}
+
+// In a dev menu: "Simulate offline" calls set(false).
+      </script>
+
+      <h2 id="migrations">Migrations</h2>
+      <p>
+        Jobs outlive app updates. If you change a payload's shape, jobs saved by the previous
+        version still carry the old one. A migration upgrades them once, when the queue loads.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+createQueue({
+  storage,
+  migrations: {
+    updateProfile: {
+      version: 3,                                           // the current shape
+      migrate(payload, fromVersion) {
+        let p = payload as any;
+        if (fromVersion < 2) p = { ...p, locale: "en" };                  // v1 -> v2: add a field
+        if (fromVersion < 3) p = { ...p, name: p.firstName, firstName: undefined };   // v2 -> v3: rename
+        return p;
+      },
+    },
+  },
+});
+      </script>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Situation</th><th>Result</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Saved job has no version</td><td>Treated as version 1.</td></tr>
+            <tr><td>Saved version is lower than <code>version</code></td><td><code>migrate(payload, savedVersion)</code> runs once. The result and the new version are saved.</td></tr>
+            <tr><td>Saved version is the same or newer</td><td>Left untouched.</td></tr>
+            <tr><td><code>migrate</code> throws</td><td>That job becomes <code>failed</code> with <code>lastError</code> "Migration failed: ...". Other jobs are unaffected.</td></tr>
+            <tr><td>A type with no migration</td><td>Untouched.</td></tr>
+            <tr><td>New jobs</td><td>Stamped with the current <code>version</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <h3>Renaming a job type</h3>
+      <p>
+        Migrations change payloads, not names. If you rename a type, jobs saved under the old name
+        have no handler and would wait forever. Keep an alias handler for the old name:
+      </p>
+      <script type="text/x-code" data-lang="ts">
+export const uploadPhoto = queue.define("uploadPhoto", handler);
+queue.define("uploadPhoto_v1", handler);       // old name, same behaviour: drains old jobs
+      </script>
+
+      <h2 id="multiple-queues">Multiple queues</h2>
+      <p>
+        Each <code>createQueue</code> call is an independent queue with its own concurrency,
+        timeout, retry policy and limits. Queues are separated in storage by
+        <code>name</code>, so they can safely share one MMKV instance.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="queues.ts">
+const storage = createMMKV({ id: "queuekit" });
+const network = netInfoMonitor(NetInfo);
+
+export const uploads = createQueue({
+  name: "uploads",
+  storage,
+  network,
+  concurrency: 2,
+  timeoutMs: 5 * 60_000,                    // big files need longer
+  retry: { maxAttempts: 10, maxDelayMs: 10 * 60_000 },
+});
+
+export const analytics = createQueue({
+  name: "analytics",
+  storage,
+  network,
+  concurrency: 1,
+  retry: { maxAttempts: 20 },
+});
+
+export const uploadPhoto = uploads.define("uploadPhoto", uploadHandler);
+export const track = analytics.define("track", trackHandler);
+      </script>
+      <p>
+        <strong>When to split:</strong> different timeouts, different failure tolerance, or you do
+        not want bulk work to share concurrency slots with user-facing work. For simple prioritization,
+        one queue with <code>priority</code> is enough.
+      </p>
+      <div class="callout note">
+        <strong class="label">Hooks with several queues</strong>
+        <p>
+          <code>QueueProvider</code> holds one queue. For others, nest providers (the inner one wins
+          for its subtree), or use <code>useSyncExternalStore(analytics.subscribe, analytics.getStats)</code>
+          directly.
+        </p>
+      </div>
+
+      <h2 id="leader-lease">Several instances sharing one storage</h2>
+      <p>
+        Normally an app has exactly one JavaScript runtime and one queue, and none of this applies.
+        It matters when two instances can exist over the same storage and <code>name</code>: a
+        second JS context in the same process, an app extension, or a development reload that left
+        the old queue running. Each instance would load the same jobs and run them, so they run
+        twice.
+      </p>
+      <p>
+        The <code>lease</code> option lets only one instance, the <em>leader</em>, run jobs at a time.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const queue = createQueue({ storage, network, lease: true });          // 15 s lease
+const custom = createQueue({ storage, network, lease: { ttlMs: 30_000 } });
+
+queue.isLeader();    // true while this instance may run jobs
+      </script>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Situation</th><th>What happens</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>First instance starts</td><td>It takes the lease and leads. Later instances become followers.</td></tr>
+            <tr><td>A follower calls <code>enqueue()</code></td><td>The job is saved. The leader finds it on its next heartbeat (every <code>ttlMs / 3</code>) and runs it. Until then the leader does not know about it, so <code>orderKey</code> order across instances is best effort.</td></tr>
+            <tr><td>The leader stops while idle</td><td>It releases the lease. A follower takes over on its next heartbeat, or immediately on <code>flush()</code>.</td></tr>
+            <tr><td>The leader stops with a job still running</td><td>It keeps renewing the lease until that job ends, then releases it, so the job is never run twice.</td></tr>
+            <tr><td>The leader dies</td><td>Its lease expires after <code>ttlMs</code>. A follower takes over, treats the jobs the dead leader was running as interrupted, and runs them again.</td></tr>
+            <tr><td><code>drain()</code> on a follower</td><td>Resolves <code>true</code> at once: this instance has nothing to run.</td></tr>
+            <tr><td>Followers' view of the jobs</td><td>Refreshed from storage every <code>ttlMs / 3</code>, so hooks stay roughly current.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn">
+        <strong class="label">Limits</strong>
+        <ul>
+          <li>Storage has no atomic compare-and-set. Two instances acquiring in the same instant can both believe they won. This makes double runs very unlikely, not impossible: keep handlers idempotent.</li>
+          <li>Change existing jobs (<code>remove</code>, <code>retry</code>, <code>clear</code>, <code>complete</code>, <code>fail</code>) on the leader. A follower's changes to jobs the leader already holds in memory are not merged.</li>
+          <li>Off by default. It costs one small storage write per heartbeat.</li>
+          <li>It does not fix Fast Refresh: the old queue keeps renewing the lease, so the new one stays a follower. Dispose the old instance (<a href="faq.html#jobs-run-twice">FAQ</a>).</li>
+        </ul>
+      </div>
+
+      <h2 id="logout">Signing out and switching users</h2>
+      <p>Jobs often belong to one account. Pick a strategy:</p>
+      <script type="text/x-code" data-lang="ts">
+// A. Drop everything on sign-out. Simple. Unsent work is lost.
+queue.clear();
+
+// B. A queue per user. Their jobs wait safely and resume when they sign back in.
+let queue: Queue | undefined;
+export function onSignIn(userId: string) {
+  queue = createQueue({ name: `user-${userId}`, storage, network });
+  registerHandlers(queue);
+}
+export function onSignOut() {
+  queue?.dispose();          // stops it; stored jobs stay on disk
+  queue = undefined;
+}
+
+// C. A storage instance per user (also gives per-user encryption keys).
+const storage = createMMKV({ id: `queuekit-${userId}` });
+      </script>
+      <p>
+        Do not leave jobs from user A runnable under user B's session: handlers read the current
+        token when they run, so they would act as the wrong user.
+      </p>
+
+      <h2 id="testing">Testing</h2>
+      <p>
+        Everything is plain objects and promises, so tests need no mocks of the queue itself. Use
+        <code>memoryStorage()</code>, a fake network, and <code>await queue.drain()</code>.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="uploads.test.ts">
+import { createQueue, memoryStorage, NonRetryableError } from "@nijatk/react-native-queuekit";
+import { expect, it, vi } from "vitest";
+
+it("uploads once and removes the job", async () => {
+  const upload = vi.fn().mockResolvedValue(undefined);
+  const queue = createQueue({ storage: memoryStorage(), retry: { baseDelayMs: 1, jitter: false } });
+  const uploadPhoto = queue.define("uploadPhoto", upload);
+
+  uploadPhoto({ uri: "a.jpg" });
+  await queue.drain();                          // wait until nothing can run
+
+  expect(upload).toHaveBeenCalledOnce();
+  expect(queue.getStats().total).toBe(0);
+});
+
+it("retries transient failures", async () => {
+  const handler = vi.fn().mockRejectedValueOnce(new Error("503")).mockResolvedValue(undefined);
+  const queue = createQueue({ storage: memoryStorage(), retry: { baseDelayMs: 1, jitter: false } });
+  queue.define("job", handler)({});
+
+  await queue.drain();
+
+  expect(handler).toHaveBeenCalledTimes(2);
+});
+
+it("fails permanently on a 4xx", async () => {
+  const queue = createQueue({ storage: memoryStorage() });
+  queue.define("job", () => { throw new NonRetryableError("400"); })({});
+
+  await queue.drain();
+
+  expect(queue.getJobs({ status: "failed" })).toHaveLength(1);
+});
+      </script>
+
+      <h3>Offline behaviour</h3>
+      <script type="text/x-code" data-lang="ts">
+function fakeNetwork(initial = true) {
+  let online = initial;
+  const listeners = new Set<(o: boolean) => void>();
+  return {
+    isOnline: () => online,
+    subscribe: (l: (o: boolean) => void) => (listeners.add(l), () => listeners.delete(l)),
+    set(value: boolean) { online = value; for (const l of listeners) l(value); },
+  };
+}
+
+it("waits offline and runs when back online", async () => {
+  const network = fakeNetwork(false);
+  const handler = vi.fn();
+  const queue = createQueue({ storage: memoryStorage(), network });
+  queue.define("job", handler)({});
+
+  await queue.drain();                                    // resolves: nothing can run offline
+  expect(handler).not.toHaveBeenCalled();
+
+  network.set(true);
+  await queue.drain();
+  expect(handler).toHaveBeenCalledOnce();
+});
+      </script>
+
+      <h3>Persistence and restarts</h3>
+      <script type="text/x-code" data-lang="ts">
+it("resumes saved jobs after a restart", async () => {
+  const storage = memoryStorage();                        // shared by both "launches"
+  const first = createQueue({ storage, autoStart: false });
+  first.enqueue("job", { n: 1 });
+  first.dispose();
+
+  const handler = vi.fn();
+  const second = createQueue({ storage, handlers: { job: handler } });
+  await second.drain();
+
+  expect(handler).toHaveBeenCalledWith({ n: 1 }, expect.anything());
+});
+      </script>
+
+      <h3>Tips</h3>
+      <ul>
+        <li>Use <code>retry: { baseDelayMs: 1, jitter: false }</code> so retries take milliseconds, not seconds.</li>
+        <li>Export the handler as a plain function next to the job, so you can unit test it without a queue at all.</li>
+        <li>Use <code>autoStart: false</code> and <code>queue.start()</code> when you need to enqueue several jobs before anything runs, for example to test ordering.</li>
+        <li>Fake timers work for delays and backoff, but advance them asynchronously (<code>vi.advanceTimersByTimeAsync</code>) so promise callbacks run.</li>
+        <li>Call <code>queue.dispose()</code> in <code>afterEach</code> if a test leaves jobs running.</li>
+      </ul>
+
+      <h2 id="typescript">TypeScript tips</h2>
+      <script type="text/x-code" data-lang="ts">
+import type { Job, JobFn, JobContext } from "@nijatk/react-native-queuekit";
+
+// Reuse a payload type from a defined job:
+type PhotoPayload = Parameters<typeof uploadPhoto>[0];
+
+// A typed job in a list:
+const job: Job<PhotoPayload> = uploadPhoto({ uri, albumId });
+
+// Take a job as a dependency (for tests or injection):
+function useUploader(upload: JobFn<PhotoPayload>) { /* ... */ }
+
+// Handler helpers with the context type:
+async function handler(p: PhotoPayload, ctx: JobContext<PhotoPayload>) { /* ... */ }
+      </script>
+    </article>
+  </body>
+</html>

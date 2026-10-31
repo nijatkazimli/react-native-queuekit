@@ -1,0 +1,244 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Install QueueKit, set up MMKV and NetInfo, create your first queue and job." />
+    <title>Getting started - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Getting started</h1>
+      <p class="lead">
+        From zero to a job that survives airplane mode, in about ten minutes. This page covers
+        installation, the native pieces, creating the queue, defining a job and showing its status.
+      </p>
+
+      <h2>Requirements</h2>
+      <ul>
+        <li>React Native 0.76 or newer (required by <code>react-native-mmkv</code> 4).</li>
+        <li>
+          Expo users need a development build. <code>react-native-mmkv</code> is a native module,
+          so Expo Go cannot run it.
+        </li>
+        <li>React 18 or newer if you use the hooks from <code>@nijatk/react-native-queuekit/react</code>.</li>
+        <li>TypeScript is optional but recommended. Types ship with the package.</li>
+      </ul>
+
+      <h2>Install</h2>
+      <div class="tabs">
+        <div class="tab-list">
+          <button type="button">npm</button>
+          <button type="button">yarn</button>
+          <button type="button">pnpm</button>
+          <button type="button">Expo</button>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="sh">
+npm install @nijatk/react-native-queuekit react-native-mmkv react-native-nitro-modules
+npm install @react-native-community/netinfo   # recommended, for connectivity
+cd ios && pod install
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="sh">
+yarn add @nijatk/react-native-queuekit react-native-mmkv react-native-nitro-modules
+yarn add @react-native-community/netinfo
+cd ios && pod install
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="sh">
+pnpm add @nijatk/react-native-queuekit react-native-mmkv react-native-nitro-modules
+pnpm add @react-native-community/netinfo
+cd ios && pod install
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="sh">
+npx expo install react-native-mmkv react-native-nitro-modules @react-native-community/netinfo
+npm install @nijatk/react-native-queuekit
+npx expo prebuild
+npx expo run:ios   # or run:android
+          </script>
+        </div>
+      </div>
+      <div class="callout note">
+        <strong class="label">Why NetInfo is recommended</strong>
+        <p>
+          Without a network monitor the queue assumes the device is always online. It still works,
+          but offline attempts fail and use up retries, and nothing reacts to reconnecting. See
+          <a href="storage.html#network-monitors">Network monitors</a>.
+        </p>
+      </div>
+
+      <h2>Create the queue</h2>
+      <p>Create it once, in its own module, and import it wherever you need it.</p>
+      <script type="text/x-code" data-lang="ts" data-title="queue.ts">
+import NetInfo from "@react-native-community/netinfo";
+import { createMMKV } from "react-native-mmkv";
+import { createQueue, netInfoMonitor } from "@nijatk/react-native-queuekit";
+
+export const queue = createQueue({
+  storage: createMMKV({ id: "queuekit" }),
+  network: netInfoMonitor(NetInfo),
+});
+      </script>
+      <p>
+        That is a complete configuration. Everything else is optional: concurrency (default 3), the
+        per-attempt timeout (default 30 seconds), the retry policy, per-type limits and payload
+        migrations. See <a href="reference.html#createqueue">createQueue</a> for all options.
+      </p>
+      <p>
+        A <code>react-native-mmkv</code> instance is passed straight in as <code>storage</code>. It
+        already has the four synchronous methods the queue needs.
+      </p>
+
+      <h2>Define your first job</h2>
+      <p>
+        <code>queue.define(type, handler)</code> registers the handler and returns a function that
+        enqueues the job. The payload type is taken from the handler's first parameter.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="features/uploads.ts">
+import { NonRetryableError } from "@nijatk/react-native-queuekit";
+import { queue } from "../queue";
+
+type Photo = { uri: string; albumId: string };
+
+export const uploadPhoto = queue.define(
+  "uploadPhoto",
+  async ({ uri, albumId }: Photo, { job, signal, progress }) => {
+    const body = new FormData();
+    body.append("albumId", albumId);
+    body.append("file", { uri, name: "photo.jpg", type: "image/jpeg" } as unknown as Blob);
+
+    const res = await fetch("https://api.example.com/photos", {
+      method: "POST",
+      body,
+      signal,                                   // aborted on timeout or removal
+      headers: { "Idempotency-Key": job.id },   // safe if the job runs twice
+    });
+
+    if (res.status === 400) throw new NonRetryableError("rejected by server");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);  // retried with backoff
+    progress(1);
+  },
+  { priority: 5 }, // defaults for every call
+);
+      </script>
+
+      <h2>Enqueue it</h2>
+      <script type="text/x-code" data-lang="ts">
+const job = uploadPhoto({ uri, albumId: "holiday" });
+
+job.id;       // unique id, already saved to storage
+job.status;   // "pending"
+      </script>
+      <p>
+        The call is synchronous and returns the stored <a href="reference.html#job">Job</a>. If the
+        device is online the job starts right away. If not, it waits.
+      </p>
+
+      <h2>Register handlers at startup</h2>
+      <p>
+        Handlers must be registered before a saved job can run. Jobs without a handler simply stay
+        pending, so late registration is safe, but a job whose module is never imported never runs.
+        Import all your job modules once at startup, for example from your app entry file:
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="features/index.ts">
+import "./uploads";
+import "./feedback";
+import "./analytics";
+      </script>
+      <script type="text/x-code" data-lang="tsx" data-title="App.tsx">
+import "./features";
+import { QueueProvider } from "@nijatk/react-native-queuekit/react";
+import { queue } from "./queue";
+
+export default function App() {
+  return (
+    <QueueProvider queue={queue}>
+      <Root />
+    </QueueProvider>
+  );
+}
+      </script>
+
+      <h2>Show status in the UI</h2>
+      <script type="text/x-code" data-lang="tsx">
+import { useJobs, useQueueStats } from "@nijatk/react-native-queuekit/react";
+import { uploadPhoto } from "./features/uploads";
+
+function UploadStatus() {
+  const { pending, active, failed } = useQueueStats();
+  const uploads = useJobs({ type: uploadPhoto.type });
+
+  return (
+    <>
+      <Text>{pending} waiting, {active} uploading, {failed} failed</Text>
+      {uploads.map((job) => (
+        <Text key={job.id}>
+          {job.status} {job.progress !== undefined ? `${Math.round(job.progress * 100)}%` : ""}
+        </Text>
+      ))}
+    </>
+  );
+}
+      </script>
+      <p>More in <a href="react.html">React hooks</a>.</p>
+
+      <h2>Try it</h2>
+      <ol>
+        <li>Turn on airplane mode.</li>
+        <li>Enqueue a job. It appears as <code>pending</code> and nothing is sent.</li>
+        <li>Force-quit the app and reopen it. The job is still there.</li>
+        <li>Turn airplane mode off. The job runs and disappears.</li>
+      </ol>
+      <p>If something does not run, see the checklist in <a href="faq.html#jobs-are-not-running">FAQ</a>.</p>
+
+      <h2 id="decorators-setup">Optional: decorators setup</h2>
+      <p>
+        Class-method decorators (<code>@queue.handler</code>) use the standard TC39 syntax. Skip this
+        section if you use <code>queue.define()</code>.
+      </p>
+      <script type="text/x-code" data-lang="js" data-title="babel.config.js">
+module.exports = {
+  presets: ["module:@react-native/babel-preset"],
+  plugins: [["@babel/plugin-proposal-decorators", { version: "2023-11" }]],
+};
+      </script>
+      <p>
+        In <code>tsconfig.json</code> leave <code>experimentalDecorators</code> off. Do not enable
+        it: those are the older, incompatible decorators. Expo projects use
+        <code>babel-preset-expo</code> instead of the preset above; add the same plugin to the
+        <code>plugins</code> array.
+      </p>
+      <div class="callout warn">
+        <strong class="label">Not tested on a device yet</strong>
+        <p>
+          Metro and Hermes handling of decorators depends on your Babel setup. If you hit issues,
+          <code>queue.define()</code> needs no configuration and does the same job.
+        </p>
+      </div>
+
+      <h2>Suggested project layout</h2>
+      <script type="text/x-code" data-lang="sh">
+src/
+  queue.ts              # createQueue(), nothing else
+  features/
+    index.ts            # imports every job module once
+    uploads.ts          # queue.define("uploadPhoto", ...)
+    feedback.ts         # queue.define("submitFeedback", ...)
+    analytics.ts        # queue.define("trackEvent", ...)
+  api.ts                # shared fetch helper: idempotency key, error classification
+      </script>
+      <p>
+        Keeping one job per feature file means no central list of handlers to maintain, and the
+        queue module never imports feature code.
+      </p>
+    </article>
+  </body>
+</html>

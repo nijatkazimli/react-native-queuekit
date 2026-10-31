@@ -1,0 +1,279 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="QueueKit is a reliable local job queue for React Native: offline uploads, form submissions, background jobs and retries, backed by MMKV." />
+    <title>QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <section class="hero">
+        <h1>Reliable offline job processing for React Native</h1>
+        <p class="lead">
+          A local queue for uploads, form submissions, background work and retries when mobile
+          connectivity is unreliable. Jobs are saved to disk before your code continues, run when the
+          network allows, and survive app kills.
+        </p>
+        <div class="cta">
+          <a class="btn primary" href="getting-started.html">Get started</a>
+          <a class="btn" href="reference.html">API reference</a>
+          <a class="btn" href="recipes-app.html">Browse recipes</a>
+        </div>
+      </section>
+
+      <h2>Why QueueKit</h2>
+      <div class="grid">
+        <div class="card">
+          <h3>Saved before it returns</h3>
+          <p>
+            Storage is MMKV, which is synchronous. <code>enqueue()</code> writes the job to disk
+            before it returns, so a crash a millisecond later cannot lose it.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Network aware</h3>
+          <p>
+            Jobs wait while offline and run the moment you reconnect. A connection that drops
+            mid-request does not burn a retry.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Smart retries</h3>
+          <p>
+            Exponential backoff with jitter, per-job attempt limits, <code>Retry-After</code>
+            support and an error type that gives up immediately.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Typed and ergonomic</h3>
+          <p>
+            <code>queue.define()</code> turns a handler into a typed function. Or use decorators on
+            class methods. Payload types are inferred.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Control knobs</h3>
+          <p>
+            Priority, concurrency, per-type limits, rate limits, delays, expiry, de-duplication and
+            cancellation through <code>AbortSignal</code>.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Background ready</h3>
+          <p>
+            Flush on foreground, drain inside OS background tasks, and hand big uploads to native
+            uploaders with <code>ctx.detach()</code>.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Observable</h3>
+          <p>
+            React hooks for live UI, plus <code>queue.observe()</code> for Firebase, App Insights,
+            Sentry or your own logging, with durations.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Small and modular</h3>
+          <p>
+            Zero runtime dependencies in the core. Storage and network are plain interfaces. React
+            hooks live in a separate entry point.
+          </p>
+        </div>
+        <div class="card">
+          <h3>Tested</h3>
+          <p>100% statement and branch coverage is enforced on every commit and push.</p>
+        </div>
+      </div>
+
+      <h2>A 60-second example</h2>
+      <script type="text/x-code" data-lang="ts" data-title="queue.ts">
+import NetInfo from "@react-native-community/netinfo";
+import { createMMKV } from "react-native-mmkv";
+import { createQueue, netInfoMonitor } from "@nijatk/react-native-queuekit";
+
+export const queue = createQueue({
+  storage: createMMKV({ id: "queuekit" }),
+  network: netInfoMonitor(NetInfo),
+});
+      </script>
+      <script type="text/x-code" data-lang="ts" data-title="features/feedback.ts">
+import { queue } from "../queue";
+
+export const submitFeedback = queue.define(
+  "submitFeedback",
+  async (payload: { rating: number; comment: string }, { job, signal }) => {
+    const res = await fetch("https://api.example.com/feedback", {
+      method: "POST",
+      signal,
+      headers: { "Content-Type": "application/json", "Idempotency-Key": job.id },
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`); // retried with backoff
+  },
+);
+      </script>
+      <script type="text/x-code" data-lang="tsx" data-title="FeedbackScreen.tsx">
+import { useQueueStats } from "@nijatk/react-native-queuekit/react";
+import { submitFeedback } from "./features/feedback";
+
+function FeedbackScreen() {
+  const { pending, failed } = useQueueStats();
+
+  return (
+    <View>
+      <Button
+        title="Send"
+        onPress={() => submitFeedback({ rating: 5, comment: "Love it" })}
+      />
+      <Text>{pending} waiting, {failed} failed</Text>
+    </View>
+  );
+}
+      </script>
+      <p>
+        That is the whole integration. Offline, the button still "works": the job is stored and
+        sent when a connection returns, even if the app was closed in between.
+      </p>
+
+      <h2 id="how-it-works">How it works</h2>
+      <p>
+        Every job is a small JSON object stored under its own key. A scheduler picks the jobs that
+        are allowed to run, runs them through your handlers, and updates the stored state after each
+        step. Completed jobs are deleted. The diagram shows every state and transition.
+      </p>
+
+      <div class="diagram">
+        <svg viewBox="0 0 900 380" role="img" aria-label="Job lifecycle state diagram">
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path class="arrow" d="M0 0L10 5L0 10z" />
+            </marker>
+          </defs>
+
+          <rect class="box" x="20" y="150" width="120" height="50" rx="10" />
+          <text x="80" y="173" text-anchor="middle">enqueue()</text>
+          <text class="sub" x="80" y="190" text-anchor="middle">saved to storage</text>
+
+          <rect class="box pending" x="220" y="145" width="140" height="62" rx="10" />
+          <text x="290" y="172" text-anchor="middle">pending</text>
+          <text class="sub" x="290" y="190" text-anchor="middle">waiting its turn</text>
+
+          <rect class="box active" x="460" y="145" width="140" height="62" rx="10" />
+          <text x="530" y="172" text-anchor="middle">active</text>
+          <text class="sub" x="530" y="190" text-anchor="middle">handler running</text>
+
+          <rect class="box done" x="720" y="50" width="150" height="50" rx="10" />
+          <text x="795" y="72" text-anchor="middle">completed</text>
+          <text class="sub" x="795" y="89" text-anchor="middle">job deleted</text>
+
+          <rect class="box failed" x="720" y="250" width="150" height="62" rx="10" />
+          <text x="795" y="277" text-anchor="middle">failed</text>
+          <text class="sub" x="795" y="295" text-anchor="middle">kept for inspection</text>
+
+          <rect class="box done" x="40" y="290" width="150" height="50" rx="10" />
+          <text x="115" y="312" text-anchor="middle">expired</text>
+          <text class="sub" x="115" y="329" text-anchor="middle">job deleted</text>
+
+          <path class="edge" d="M140 176 L218 176" marker-end="url(#arr)" />
+          <path class="edge" d="M360 176 L458 176" marker-end="url(#arr)" />
+          <text class="sub" x="409" y="164" text-anchor="middle">due + online</text>
+          <text class="sub" x="409" y="200" text-anchor="middle">+ free slot</text>
+
+          <path class="edge" d="M530 145 C 530 70, 290 70, 290 143" marker-end="url(#arr)" />
+          <text class="sub" x="410" y="62" text-anchor="middle">handler threw: retry after backoff</text>
+          <text class="sub" x="410" y="78" text-anchor="middle">(offline mid-run: requeued, no attempt used)</text>
+
+          <path class="edge" d="M600 160 L718 90" marker-end="url(#arr)" />
+          <text class="sub" x="700" y="140" text-anchor="middle">returned / resolved</text>
+
+          <path class="edge" d="M600 195 L718 268" marker-end="url(#arr)" />
+          <text class="sub" x="650" y="262" text-anchor="middle">out of attempts or</text>
+          <text class="sub" x="650" y="277" text-anchor="middle">NonRetryableError</text>
+
+          <path class="edge" d="M795 312 C 795 372, 290 372, 290 209" marker-end="url(#arr)" />
+          <text class="sub" x="540" y="366" text-anchor="middle">queue.retry(id)</text>
+
+          <path class="edge" d="M250 207 L150 288" marker-end="url(#arr)" />
+          <text class="sub" x="150" y="250" text-anchor="middle">ttlMs elapsed</text>
+        </svg>
+      </div>
+
+      <h3>What is guaranteed and what is not</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Guarantee</th><th>Details</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Durable enqueue</td>
+              <td>The job is in storage before <code>enqueue()</code> returns.</td>
+            </tr>
+            <tr>
+              <td>At-least-once execution</td>
+              <td>
+                If the app dies while a job runs, it runs again next launch. Make handlers
+                idempotent. QueueKit hands you <code>job.id</code> as a ready-made idempotency key.
+              </td>
+            </tr>
+            <tr>
+              <td>No lost failures</td>
+              <td>
+                Jobs that run out of attempts stay as <code>failed</code> with the last error until
+                you retry or remove them.
+              </td>
+            </tr>
+            <tr>
+              <td>Priority, then FIFO</td>
+              <td>
+                Higher priority first, then earliest due time, then oldest. Strict ordering across
+                retries needs an <code>orderKey</code>.
+              </td>
+            </tr>
+            <tr>
+              <td>JavaScript required</td>
+              <td>
+                The queue runs in your JS runtime. While the app is suspended it pauses, unless you
+                use background tasks or native uploaders. See
+                <a href="background.html">Background and native tasks</a>.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2>Where to go next</h2>
+      <div class="grid">
+        <a class="card" href="getting-started.html">
+          <h3>Getting started</h3>
+          <p>Install, set up MMKV and NetInfo, create your first queue and job.</p>
+        </a>
+        <a class="card" href="jobs.html">
+          <h3>Jobs and handlers</h3>
+          <p>Every way to define a job, every handler form, and all enqueue options.</p>
+        </a>
+        <a class="card" href="reliability.html">
+          <h3>Reliability and scheduling</h3>
+          <p>Retries, backoff calculator, timeouts, network rules, limits, expiry.</p>
+        </a>
+        <a class="card" href="react.html">
+          <h3>React hooks</h3>
+          <p>Live status, progress bars, retry buttons and sync banners.</p>
+        </a>
+        <a class="card" href="background.html">
+          <h3>Background and native tasks</h3>
+          <p>Foreground flush, background drain and OS-level uploads.</p>
+        </a>
+        <a class="card" href="recipes-app.html">
+          <h3>Cookbook</h3>
+          <p>Over thirty ready-to-copy recipes for real app flows, APIs and media.</p>
+        </a>
+      </div>
+      <p class="footer">MIT licensed. Documentation for QueueKit 0.1.</p>
+    </article>
+  </body>
+</html>

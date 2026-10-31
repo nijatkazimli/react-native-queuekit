@@ -1,0 +1,303 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Retries and backoff, timeouts, network awareness, ordering, concurrency, rate limits, delays, expiry and crash recovery in QueueKit." />
+    <title>Reliability and scheduling - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Reliability and scheduling</h1>
+      <p class="lead">
+        How jobs move through their life, when they run, when they retry, and what happens when
+        things go wrong. Read this page once and the queue's behaviour will never surprise you.
+      </p>
+
+      <h2 id="lifecycle">Job lifecycle</h2>
+      <p>The <a href="index.html#how-it-works">diagram on the overview</a> shows the transitions. In words:</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>State</th><th>Meaning</th><th>Leaves the state when</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>pending</code></td>
+              <td>Saved and waiting: not due yet, offline, no handler yet, or no free slot.</td>
+              <td>It becomes <em>due</em> and eligible, then starts (<code>active</code>), or it expires or is removed.</td>
+            </tr>
+            <tr>
+              <td><code>active</code></td>
+              <td>A handler is running it, or it was detached to a native task.</td>
+              <td>The handler finishes (deleted), throws (<code>pending</code> or <code>failed</code>), or <code>complete()</code> / <code>fail()</code> is called for detached jobs.</td>
+            </tr>
+            <tr>
+              <td><code>failed</code></td>
+              <td>Out of attempts or rejected with <code>NonRetryableError</code>. Kept with <code>lastError</code>.</td>
+              <td><code>retry(id)</code> (back to <code>pending</code>) or <code>remove(id)</code>.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        There is no <code>completed</code> state: finished jobs are deleted. Listen for the
+        <code>completed</code> <a href="control.html#events">event</a> if you need to react.
+      </p>
+      <p>A pending job is <strong>eligible to start</strong> when all of these are true:</p>
+      <ol>
+        <li>Its <code>runAt</code> time has arrived (delay or backoff has elapsed).</li>
+        <li>A handler is registered for its type.</li>
+        <li>The device is online, or the job has <code>requiresNetwork: false</code>.</li>
+        <li>The queue is started and has a free slot (<code>concurrency</code>), and its type's <a href="#limits">limits</a> allow it.</li>
+      </ol>
+
+      <h2 id="retries">Retries and backoff</h2>
+      <p>
+        When a handler throws, the attempt counts as failed. If attempts remain, the job goes back
+        to <code>pending</code> with its <code>runAt</code> pushed into the future. The wait grows
+        exponentially:
+      </p>
+      <p><code>delay = min(maxDelayMs, baseDelayMs * 2^(failures - 1))</code>, then, with jitter, a random value between <code>delay / 2</code> and <code>delay</code>.</p>
+
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Option</th><th>Default</th><th>Meaning</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>retry.maxAttempts</code></td><td>5</td><td>Total attempts including the first.</td></tr>
+            <tr><td><code>retry.baseDelayMs</code></td><td>1000</td><td>Wait after the first failure. Doubles each time.</td></tr>
+            <tr><td><code>retry.maxDelayMs</code></td><td>60000</td><td>Upper bound for one wait.</td></tr>
+            <tr><td><code>retry.jitter</code></td><td>true</td><td>Randomize each wait within 50% to 100% so devices do not retry in lockstep.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <script type="text/x-code" data-lang="ts">
+createQueue({
+  storage,
+  retry: { maxAttempts: 8, baseDelayMs: 2_000, maxDelayMs: 5 * 60_000, jitter: true },
+});
+
+// Per job, overriding the queue's maxAttempts:
+submitPayment(payment, { maxAttempts: 1 });
+      </script>
+
+      <h3>Backoff calculator</h3>
+      <p>Change the numbers to see exactly how long a job waits between attempts.</p>
+      <div data-backoff></div>
+
+      <h3>After the last attempt</h3>
+      <p>
+        The job becomes <code>failed</code>, <code>lastError</code> holds the final message, and the
+        <code>failed</code> event fires with the error. It stays in storage until you decide:
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const failed = queue.getJobs({ status: "failed" });
+for (const job of failed) console.log(job.type, job.attempts, job.lastError);
+
+queue.retry(failed[0].id);    // fresh attempt budget, runs again
+queue.remove(failed[1].id);   // give up for good
+      </script>
+
+      <h2 id="retry-after">Retry-After and RetryAfterError</h2>
+      <p>
+        When a server tells you how long to wait (HTTP 429 or 503), use that instead of the generic
+        backoff. <code>parseRetryAfter</code> understands both header formats.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Header value</th><th><code>parseRetryAfter(value)</code></th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>"120"</code></td><td>120000</td></tr>
+            <tr><td><code>"0"</code></td><td>0</td></tr>
+            <tr><td><code>"Thu, 01 Jan 2026 00:00:30 GMT"</code> (30 s in the future)</td><td>30000</td></tr>
+            <tr><td>An HTTP date in the past</td><td>0</td></tr>
+            <tr><td><code>null</code>, <code>undefined</code>, <code>""</code>, or garbage</td><td><code>undefined</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <script type="text/x-code" data-lang="ts">
+if (res.status === 429 || res.status === 503) {
+  const wait = parseRetryAfter(res.headers.get("Retry-After"));
+  if (wait !== undefined) throw new RetryAfterError(wait, `HTTP ${res.status}`);
+}
+      </script>
+      <p>
+        The error still uses up an attempt, and the delay is used as given (it is not capped by
+        <code>maxDelayMs</code>), because the server knows best.
+      </p>
+
+      <h2 id="classifying-failures">Classifying failures</h2>
+      <p>
+        The most useful retry policy is knowing which errors are worth retrying. A reasonable
+        starting point for HTTP APIs:
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Situation</th><th>Do</th><th>Why</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Network error (fetch rejects)</td><td>Throw (retry)</td><td>Transient. If the device is offline, the queue does not even count the attempt.</td></tr>
+            <tr><td>408 Request Timeout</td><td>Throw (retry)</td><td>Transient.</td></tr>
+            <tr><td>429 Too Many Requests</td><td><code>RetryAfterError</code> if the header exists, else throw</td><td>Server asked you to slow down.</td></tr>
+            <tr><td>500, 502, 503, 504</td><td>Throw (retry)</td><td>Server trouble, usually temporary.</td></tr>
+            <tr><td>400, 404, 405, 410, 422</td><td><code>NonRetryableError</code></td><td>The request itself is wrong; repeating it cannot succeed.</td></tr>
+            <tr><td>401</td><td>Refresh the token and retry once; if it still fails, <code>NonRetryableError</code> or pause the queue until sign-in</td><td>See <a href="recipes-network.html#auth-refresh">auth refresh</a>.</td></tr>
+            <tr><td>409 Conflict</td><td>Usually success if you use idempotency keys; otherwise <code>NonRetryableError</code></td><td>The thing may already exist.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="timeouts">Timeouts</h2>
+      <p>
+        <code>timeoutMs</code> (default 30 seconds) limits <em>one attempt</em>. When it elapses the
+        queue aborts <code>ctx.signal</code>, stops waiting for the handler and records a
+        <code>TimeoutError</code> ("Job timed out after 30000ms") as a normal failure, so the job
+        is retried.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const queue = createQueue({ storage, timeoutMs: 2 * 60_000 });   // for slower work
+      </script>
+      <ul>
+        <li>The timeout is a queue-wide setting. For one very slow job type, put it on its own queue (see <a href="storage.html#multiple-queues">Multiple queues</a>) or hand it to a native task with <code>detach()</code>, which has no timeout.</li>
+        <li>Pass <code>ctx.signal</code> to your network calls so they actually stop.</li>
+      </ul>
+
+      <h2 id="network">Network awareness</h2>
+      <ol>
+        <li>A job with <code>requiresNetwork: true</code> (the default) does not start while the monitor reports offline.</li>
+        <li>When connectivity returns, the queue wakes up immediately and starts waiting jobs.</li>
+        <li>
+          If connectivity drops <em>during</em> an attempt and the handler throws, the job goes back
+          to <code>pending</code> <strong>without</strong> using an attempt and without a
+          <code>retry</code> event. It simply waits for the network.
+        </li>
+        <li>A job with <code>requiresNetwork: false</code> runs regardless of connectivity, and its failures use normal backoff.</li>
+      </ol>
+      <p>
+        "Online" with the NetInfo adapter means the device is connected and the internet is not
+        reported unreachable. Until the first NetInfo event the queue assumes online. Other sources
+        and custom checks are in <a href="storage.html#network-monitors">Network monitors</a>.
+      </p>
+      <div class="callout warn">
+        <strong class="label">No monitor, no offline logic</strong>
+        <p>
+          Without a <code>network</code> option the queue treats the device as always online.
+          Offline attempts then fail and burn retries, and nothing reacts to reconnecting.
+        </p>
+      </div>
+
+      <h2 id="ordering">Ordering and priority</h2>
+      <p>Among the jobs that are eligible, the queue starts them in this order:</p>
+      <ol>
+        <li>Higher <code>priority</code> first.</li>
+        <li>Then the earliest <code>runAt</code> (the time it became due).</li>
+        <li>Then the oldest <code>createdAt</code>.</li>
+      </ol>
+      <script type="text/x-code" data-lang="ts">
+// concurrency: 1, all enqueued before the queue starts
+a({ n: 1 });                       // priority 0
+b({ n: 2 }, { priority: 10 });     // priority 10
+a({ n: 3 });                       // priority 0
+// runs: b(2), a(1), a(3)
+      </script>
+      <div class="callout note">
+        <strong class="label">Strict order needs <code>orderKey</code></strong>
+        <p>
+          Without it, if job 1 fails and waits for a retry, job 2 can run first. Give jobs that
+          must stay in order the same <code>orderKey</code> (for example a chat id):
+          <code>send(msg, { orderKey: chatId })</code>. Jobs with one key run one at a time, oldest
+          first, even across retries; a job that has given up (<code>failed</code>) no longer
+          blocks the ones after it. Priority is ignored within a key, and different keys still run
+          in parallel. <code>retry(id)</code> puts a failed job back at its original position.
+        </p>
+      </div>
+
+      <h2 id="concurrency">Concurrency</h2>
+      <p>
+        <code>concurrency</code> (default 3) is the maximum number of jobs running at once in this
+        queue. Detached jobs (handed to native tasks) do not count: they hold no slot.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+createQueue({ storage, concurrency: 1 });   // strictly one at a time
+createQueue({ storage, concurrency: 6 });   // chatty small requests
+      </script>
+
+      <h2 id="limits">Per-type limits and rate limits</h2>
+      <p>
+        <code>limits</code> adds constraints for specific job types, on top of the queue-wide
+        concurrency. A type blocked by its limit never holds up other types.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+createQueue({
+  storage,
+  concurrency: 5,
+  limits: {
+    uploadVideo: { concurrency: 1 },                  // one video at a time
+    sendSms: { rate: { max: 5, perMs: 1000 } },       // at most 5 starts per second
+    callPartnerApi: {
+      concurrency: 2,
+      rate: { max: 60, perMs: 60_000 },               // 2 at once, 60 per minute
+    },
+  },
+});
+      </script>
+      <p>
+        The rate window is rolling and counts job <em>starts</em>, retries included. With
+        <code>{ max: 2, perMs: 1000 }</code> and five queued jobs, two start at t = 0, two at about
+        t = 1 s and the last at about t = 2 s. Jobs held back by a rate limit are woken by a timer,
+        no polling.
+      </p>
+
+      <h2 id="delays-expiry">Delays and expiry</h2>
+      <ul>
+        <li><code>delayMs</code> postpones the first attempt.</li>
+        <li><code>ttlMs</code> drops a job that is still pending after that long (including offline). The <code>expired</code> event fires and the job is deleted.</li>
+        <li>Delays and deadlines are wall-clock timestamps (<code>Date.now()</code>), with no clock-change protection. If the user sets the device clock back, waiting jobs wait longer; set forward, delayed jobs fire and <code>ttlMs</code> jobs expire early. Do not rely on <code>delayMs</code> or <code>ttlMs</code> for security-critical timing.</li>
+      </ul>
+
+      <h2 id="crash-recovery">Crash recovery and delivery semantics</h2>
+      <p>
+        State is saved at every transition, so the queue can be killed at any moment. On the next
+        launch:
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Job was</th><th>After restart</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>pending</code></td><td>Still pending, same <code>runAt</code>.</td></tr>
+            <tr><td><code>active</code> (handler running)</td><td>Back to <code>pending</code>. The interrupted attempt is not counted as a failure.</td></tr>
+            <tr><td><code>active</code> and detached (<code>externalId</code> set)</td><td>Still <code>active</code>. Reattach to the native task. See <a href="background.html#native-tasks">Native tasks</a>.</td></tr>
+            <tr><td><code>failed</code></td><td>Still failed, with its error.</td></tr>
+            <tr><td>Corrupt entry in storage</td><td>Deleted.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Because an interrupted handler runs again, QueueKit is <strong>at-least-once</strong>. The
+        handler may have partly or fully done its work before the crash. Make the effect idempotent:
+      </p>
+      <script type="text/x-code" data-lang="ts">
+queue.define("createInvoice", async (data: InvoiceData, { job }) => {
+  await api.post("/invoices", data, {
+    headers: { "Idempotency-Key": job.id },     // server returns the existing invoice on a repeat
+  });
+});
+      </script>
+      <p>
+        The job id is stable across attempts and restarts, which is what makes it a good
+        idempotency key. If your backend has no idempotency support, make the operation naturally
+        repeatable (PUT instead of POST, upsert by a client-generated id).
+      </p>
+    </article>
+  </body>
+</html>

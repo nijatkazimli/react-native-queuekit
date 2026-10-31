@@ -1,0 +1,293 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="QueueKit recipes for media and files: uploads with progress, compress then upload, albums, chunked and resumable uploads, signed URLs, downloads and temp file cleanup." />
+    <title>Recipes: media and files - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Recipes: media and files</h1>
+      <p class="lead">
+        Photos, videos and documents are where offline queues earn their keep: large, slow, and
+        easy to lose. These recipes cover progress, pipelines, chunking and cleanup.
+      </p>
+
+      <h2 id="persist-first">First, make the file permanent</h2>
+      <p>
+        Image pickers and cameras often return a temporary file that the system may delete before
+        the upload runs. Copy it into your app's own storage <em>before</em> you enqueue, and put
+        that path in the payload.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+import * as FileSystem from "expo-file-system";
+
+export async function queuePhoto(asset: { uri: string }, albumId: string) {
+  const dest = `${FileSystem.documentDirectory}uploads/${uuid()}.jpg`;
+  await FileSystem.copyAsync({ from: asset.uri, to: dest });      // now it survives restarts
+  return uploadPhoto({ path: dest, albumId });
+}
+      </script>
+
+      <h2 id="progress">Upload with progress, cancel and retry</h2>
+      <p><code>fetch</code> in React Native does not report upload progress. Use <code>XMLHttpRequest</code>.</p>
+      <script type="text/x-code" data-lang="ts" data-title="uploadWithProgress.ts">
+import { NonRetryableError } from "@nijatk/react-native-queuekit";
+
+export function uploadWithProgress(
+  url: string,
+  form: FormData,
+  { headers, signal, onProgress }: {
+    headers: Record<string, string>;
+    signal: AbortSignal;
+    onProgress: (fraction: number) => void;
+  },
+) {
+  return new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", url);
+    for (const [name, value] of Object.entries(headers)) xhr.setRequestHeader(name, value);
+
+    xhr.upload.onprogress = (e) => e.lengthComputable && onProgress(e.loaded / e.total);
+    xhr.onerror = () => reject(new Error("network error"));
+    xhr.onload = () => {
+      const s = xhr.status;
+      if (s < 400) return resolve();
+      const fatal = s >= 400 && s < 500 && s !== 408 && s !== 429;
+      reject(fatal ? new NonRetryableError(`HTTP ${s}`) : new Error(`HTTP ${s}`));
+    };
+
+    signal.addEventListener("abort", () => {              // timeout or queue.remove()
+      xhr.abort();
+      reject(new Error("aborted"));
+    });
+    xhr.send(form);
+  });
+}
+      </script>
+      <script type="text/x-code" data-lang="ts" data-title="features/uploads.ts">
+export const uploadPhoto = queue.define(
+  "uploadPhoto",
+  async ({ path, albumId }: { path: string; albumId: string }, { job, signal, progress }) => {
+    const form = new FormData();
+    form.append("albumId", albumId);
+    form.append("file", { uri: path, name: "photo.jpg", type: "image/jpeg" } as unknown as Blob);
+
+    await uploadWithProgress(`${API}/photos`, form, {
+      headers: { "Idempotency-Key": job.id, Authorization: `Bearer ${await auth.getAccessToken()}` },
+      signal,
+      onProgress: progress,
+    });
+  },
+  { priority: 0, maxAttempts: 10 },
+);
+      </script>
+      <p>The list with progress bar, retry and cancel buttons is on <a href="react.html#components">React hooks</a>.</p>
+
+      <h2 id="pipeline">Compress, then upload</h2>
+      <p>
+        Two steps, two jobs. Compression needs no network, so it runs immediately, offline. Upload
+        waits for connectivity.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="features/photos.ts">
+const upload = queue.define("uploadPhoto", uploadHandler);                      // needs network
+
+export const processPhoto = queue.define(
+  "processPhoto",
+  async ({ path, albumId }: { path: string; albumId: string }, { signal }) => {
+    const small = await ImageManipulator.compress(path, { maxWidth: 2048, quality: 0.8 });
+    await FileSystem.deleteAsync(path, { idempotent: true });                   // free the big original
+    upload({ path: small, albumId });                                           // next stage
+  },
+  { requiresNetwork: false },                                                   // runs offline
+);
+      </script>
+      <ul>
+        <li>The user sees "Saved" immediately; compression happens in the background.</li>
+        <li>If the app dies between the stages, compression runs again or the upload is already saved: each step is its own persisted job.</li>
+        <li>Keep each stage idempotent: <code>idempotent: true</code> on delete, and compressing an already compressed file must be harmless.</li>
+      </ul>
+
+      <h2 id="album">A whole album, politely</h2>
+      <script type="text/x-code" data-lang="ts">
+const queue = createQueue({
+  storage, network,
+  limits: { uploadPhoto: { concurrency: 3, rate: { max: 20, perMs: 10_000 } } },   // 3 at once, 20 per 10 s
+});
+
+export async function queueAlbum(assets: Asset[], albumId: string) {
+  for (const asset of assets) {
+    const path = await persist(asset.uri);
+    uploadPhoto({ path, albumId }, { dedupeKey: asset.uri });    // choosing the same photo twice is a no-op
+  }
+}
+      </script>
+      <script type="text/x-code" data-lang="tsx">
+function AlbumProgress({ albumId }: { albumId: string }) {
+  const jobs = useJobs({ type: uploadPhoto.type })
+    .filter((j) => (j.payload as { albumId: string }).albumId === albumId);
+  if (jobs.length === 0) return null;
+  const done = jobs.reduce((sum, j) => sum + (j.status === "active" ? (j.progress ?? 0) : 0), 0);
+  return <Text>{jobs.length} photos remaining ({Math.round((done / jobs.length) * 100)}% of the current batch)</Text>;
+}
+      </script>
+
+      <h2 id="signed-url">Two-step upload with a signed URL</h2>
+      <p>Get a pre-signed URL from your API, then PUT the file to storage (S3, GCS, Azure Blob).</p>
+      <script type="text/x-code" data-lang="ts">
+export const uploadToBucket = queue.define(
+  "uploadToBucket",
+  async ({ path, contentType }: { path: string; contentType: string }, { job, signal, progress }) => {
+    // 1. A fresh URL on every attempt: signed URLs expire, so never store one in the payload.
+    const { url, objectKey } = await (await request("/uploads/sign", { body: { contentType }, key: job.id, signal })).json();
+
+    // 2. PUT the bytes to the bucket, with progress.
+    await putWithProgress(url, path, contentType, { signal, onProgress: progress });
+
+    // 3. Tell your API the object exists.
+    await request("/uploads/complete", { body: { objectKey }, key: job.id, signal });
+  },
+);
+      </script>
+      <p>
+        Step 1 uses the job id as idempotency key, so a retry returns the same object key and does not
+        create orphans.
+      </p>
+
+      <h2 id="chunked">Chunked uploads</h2>
+      <p>
+        For files too large for one request, one job per chunk, plus a finalize job when all chunks
+        are in. Chunk ids are deterministic, so re-enqueueing is harmless, and progress survives
+        restarts.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="features/chunked.ts">
+const CHUNK = 5 * 1024 * 1024;
+type Chunk = { uploadId: string; index: number; total: number; path: string };
+
+const finalize = queue.define("finalizeUpload", async ({ uploadId }: { uploadId: string }, { job, signal }) => {
+  await request(`/uploads/${uploadId}/complete`, { key: job.id, signal });
+  storage.set(`chunks:${uploadId}`, "");                        // forget bookkeeping
+});
+
+const uploadChunk = queue.define("uploadChunk", async (c: Chunk, { signal }) => {
+  const bytes = await readBytes(c.path, c.index * CHUNK, CHUNK);
+  await sendBytes(`/uploads/${c.uploadId}/chunks/${c.index}`, bytes, { signal });   // your binary PUT helper
+
+  // Record this chunk; if it was the last one missing, queue the finalize step.
+  const done = new Set<number>(JSON.parse(storage.getString(`chunks:${c.uploadId}`) || "[]"));
+  done.add(c.index);
+  storage.set(`chunks:${c.uploadId}`, JSON.stringify([...done]));
+  if (done.size === c.total) finalize({ uploadId: c.uploadId }, { id: `${c.uploadId}:final` });
+});
+
+export async function uploadLarge(path: string) {
+  const uploadId = uuid();
+  const total = Math.ceil((await fileSize(path)) / CHUNK);
+  for (let index = 0; index < total; index++) {
+    uploadChunk({ uploadId, index, total, path }, { id: `${uploadId}:${index}` });
+  }
+  return uploadId;
+}
+      </script>
+      <p>
+        With <code>limits: &#123; uploadChunk: &#123; concurrency: 3 &#125; &#125;</code> you get three chunks in
+        parallel, each retried independently on its own.
+      </p>
+
+      <h2 id="resumable">Resumable upload in one job (generator)</h2>
+      <p>
+        An <code>async function*</code> handler is a natural fit for sequential chunking: every
+        <code>yield</code> is a point where cancellation takes effect, and a retry resumes from where
+        the server says it left off.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+export const uploadResumable = queue.define(
+  "uploadResumable",
+  async function* ({ path, uploadId }: { path: string; uploadId: string }, { signal, progress }) {
+    const size = await fileSize(path);
+    let offset = await getServerOffset(uploadId, signal);          // ask what the server already has
+
+    while (offset < size) {
+      const end = Math.min(offset + CHUNK, size);
+      await putRange(uploadId, await readBytes(path, offset, end - offset), offset, signal);
+      offset = end;
+      progress(offset / size);
+      yield;                                                       // abort checkpoint
+    }
+    await request(`/uploads/${uploadId}/complete`, { key: uploadId, signal });
+  },
+  { maxAttempts: 20, requiresNetwork: true },
+);
+      </script>
+      <div class="callout note">
+        <strong class="label">Retries resume, they do not restart</strong>
+        <p>
+          A thrown error makes the queue run the generator again from the top, but
+          <code>getServerOffset</code> makes the next run skip what is already uploaded.
+        </p>
+      </div>
+
+      <h2 id="native-video">Big videos: native background upload</h2>
+      <p>
+        For videos, prefer the OS uploader so the transfer continues when the user leaves the app.
+        QueueKit tracks it with <code>ctx.detach()</code>. The full walkthrough, including reattaching
+        after a restart, is on <a href="background.html#native-tasks">Background and native tasks</a>.
+      </p>
+
+      <h2 id="downloads">Downloads and prefetching</h2>
+      <script type="text/x-code" data-lang="ts">
+export const prefetch = queue.define(
+  "prefetch",
+  async ({ url, dest }: { url: string; dest: string }, { signal }) => {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await FileSystem.writeAsStringAsync(dest, await res.text());
+  },
+  { priority: -50, ttlMs: 6 * 60 * 60 * 1000, maxAttempts: 3 },   // low priority, stale after 6 hours
+);
+      </script>
+      <p>
+        A low priority keeps prefetching from delaying user actions, and <code>ttlMs</code> drops
+        requests the user no longer needs (they scrolled past). To prefetch only on Wi-Fi, use
+        <a href="recipes-app.html#pause-on-cellular">a separate queue with a Wi-Fi-only monitor</a>.
+      </p>
+
+      <h2 id="cleanup">Clean up temp files</h2>
+      <p>
+        Delete the local copy only when you are sure it is no longer needed: after success, or after
+        the user discards a failed job.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const forget = (job: Job) => {
+  if (job.type === uploadPhoto.type) void FileSystem.deleteAsync((job.payload as { path: string }).path, { idempotent: true });
+};
+
+queue.on("completed", forget);       // uploaded: the local copy is no longer needed
+queue.on("expired", forget);         // gave up waiting
+// "failed" keeps the file so the user can retry.
+
+export function discard(job: Job) {  // remove() emits no event, so clean up here
+  queue.remove(job.id);
+  forget(job);
+}
+      </script>
+      <p>
+        Also sweep your upload directory at startup for files with no matching job, to catch leftovers
+        from crashes:
+      </p>
+      <script type="text/x-code" data-lang="ts">
+async function sweepOrphans() {
+  const live = new Set(queue.getJobs({ type: uploadPhoto.type }).map((j) => (j.payload as { path: string }).path));
+  for (const name of await FileSystem.readDirectoryAsync(UPLOAD_DIR)) {
+    const path = UPLOAD_DIR + name;
+    if (!live.has(path)) await FileSystem.deleteAsync(path, { idempotent: true });
+  }
+}
+      </script>
+    </article>
+  </body>
+</html>

@@ -1,0 +1,520 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Every way to define a QueueKit job, every handler form, the handler context, errors, payload rules and all enqueue options." />
+    <title>Jobs and handlers - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Jobs and handlers</h1>
+      <p class="lead">
+        A job is a name plus a JSON payload. A handler is the function that does the work. This page
+        covers every way to connect the two, everything a handler can do, and every option you can
+        set when enqueueing.
+      </p>
+
+      <h2>Three ways to define a job</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Style</th><th>Best for</th><th>Call site</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>queue.define()</code></td>
+              <td>Most apps. No configuration. Payload type inferred.</td>
+              <td><code>uploadPhoto({ uri })</code></td>
+            </tr>
+            <tr>
+              <td><code>@queue.handler</code></td>
+              <td>Service classes with injected dependencies.</td>
+              <td><code>queue.enqueue(svc.upload, { uri })</code></td>
+            </tr>
+            <tr>
+              <td>By name (low level)</td>
+              <td>Dynamic job types, or when you cannot import the job. The payload is not type-checked.</td>
+              <td><code>queue.enqueue("uploadPhoto", { uri })</code></td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p>All three produce the same stored job. You can mix them in one queue.</p>
+
+      <h2 id="define">queue.define()</h2>
+      <p>
+        <code>define(type, handler, defaults?)</code> registers the handler and returns a
+        <a href="reference.html#jobfn">JobFn</a>: a function that enqueues the job, with a
+        <code>.type</code> property.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+export const sendMessage = queue.define(
+  "sendMessage",                                          // stored with every job
+  async (msg: { chatId: string; text: string }, ctx) => {  // payload type inferred
+    await api.post("/messages", msg, { signal: ctx.signal });
+  },
+  { priority: 10, maxAttempts: 8 },                       // defaults for every call
+);
+
+sendMessage({ chatId: "c1", text: "hi" });                          // uses the defaults
+sendMessage({ chatId: "c1", text: "urgent" }, { priority: 99 });    // call-site options win
+sendMessage.type;                                                   // "sendMessage"
+      </script>
+      <ul>
+        <li>
+          <strong>Type safety:</strong> passing a payload that does not match the handler's
+          parameter type is a compile error.
+        </li>
+        <li>
+          <strong>Defaults:</strong> any <a href="#enqueue-options">enqueue option</a> can be a
+          default. Call-site options override them field by field.
+        </li>
+        <li>
+          <strong>Redefining:</strong> defining the same type again replaces the handler. This is
+          what makes hot reload work, but it also means an accidental duplicate name fails silently.
+          See <a href="#duplicate-names">Catching duplicate job names</a>.
+        </li>
+        <li>
+          <strong>The name matters:</strong> it is saved with each job and links it to its handler
+          after a restart. Renaming a type orphans jobs saved under the old name. See
+          <a href="storage.html#migrations">Migrations</a> and the <a href="faq.html">FAQ</a>.
+        </li>
+      </ul>
+
+      <h3 id="duplicate-names">Catching duplicate job names</h3>
+      <p>
+        A job type is just a string, and each type has exactly one handler. If two different
+        <code>define()</code> calls use the same name, the later one silently wins:
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const a = queue.define("sync", handlerA);
+const b = queue.define("sync", handlerB);   // replaces handlerA, no error
+
+a({});   // enqueues a "sync" job
+b({});   // enqueues a "sync" job
+// Both run through handlerB, and so do "sync" jobs saved in earlier sessions.
+      </script>
+      <p>
+        The payload types may disagree too, so <code>a</code>'s payload can reach
+        <code>handlerB</code> unchecked. With <code>strict</code> this is an error, and
+        <code>strict</code> is on by default outside development builds:
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const queue = createQueue({ storage, network });          // strict unless __DEV__ is true
+
+queue.define("sync", handlerA);
+queue.define("sync", handlerA);   // the identical function again: allowed
+queue.define("sync", handlerB);   // throws: Job type "sync" is already defined with a different handler
+
+createQueue({ storage, strict: false });                   // opt out: the last definition wins
+      </script>
+      <ul>
+        <li>It applies to <code>define()</code>, <code>register()</code> and <code>@queue.handler</code> alike.</li>
+        <li>Re-registering the same function reference is not a conflict.</li>
+        <li>
+          The default follows React Native's <code>__DEV__</code> flag. In development builds it is off,
+          because Fast Refresh re-runs your definitions and each re-run creates a new function. In release
+          builds and in tests (where <code>__DEV__</code> is not set) it is on, so a duplicate fails fast
+          instead of silently running the wrong handler.
+        </li>
+        <li>
+          A second instance of a class that uses <code>@queue.handler</code> counts as a different
+          handler, so strict mode also enforces the one-instance rule.
+        </li>
+        <li>
+          Do not call <code>define()</code> inside a component or function that runs repeatedly: each
+          call is a new function, which strict mode rejects. Define jobs once, at module level.
+        </li>
+      </ul>
+      <p>Habits that prevent collisions in the first place:</p>
+      <ul>
+        <li>Keep each job in its own module and prefix the name with the feature (<code>"photos.upload"</code>).</li>
+        <li>Keep all names in one constants file (<code>export const Types = { upload: "photos.upload" } as const</code>).</li>
+        <li>Import and call the function <code>define()</code> returns instead of repeating the name as a string.</li>
+      </ul>
+
+      <h2 id="by-name">By name (low level)</h2>
+      <p>
+        <code>queue.enqueue(type, payload)</code> and <code>queue.register(type, handler)</code> work
+        with plain strings. They are what <code>define()</code> is built on. Use them when the job type
+        is dynamic, or when the code that enqueues cannot import the job. The payload is typed
+        <code>unknown</code>, so nothing checks it: prefer <code>define()</code> whenever you can.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="queue.ts">
+export const queue = createQueue({
+  storage,
+  handlers: {                     // optional: register handlers up front
+    uploadPhoto: async (payload, { signal }) => { /* ... */ },
+  },
+});
+
+queue.enqueue("uploadPhoto", { uri, albumId: "a1" });   // any payload compiles
+      </script>
+      <p>You can also register a handler later, from any module:</p>
+      <script type="text/x-code" data-lang="ts">
+queue.register("submitForm", async ({ formId, values }) => {
+  await api.submit(formId, values);
+});
+      </script>
+
+      <h2 id="decorators">Class methods with decorators</h2>
+      <p>
+        Decorate a method with <code>@queue.handler(type, defaults?)</code>. The original method
+        becomes the handler, bound to the instance. Setup is on
+        <a href="getting-started.html#decorators-setup">Getting started</a>.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="ProfileService.ts">
+import type { JobContext } from "@nijatk/react-native-queuekit";
+import { queue } from "./queue";
+
+class ProfileService {
+  constructor(private api: Api) {}
+
+  @queue.handler("updateProfile", { priority: 5 })
+  async update(patch: ProfilePatch, { signal }: JobContext) {
+    await this.api.patchProfile(patch, { signal });   // `this` is the instance
+  }
+
+  @queue.handler("deleteAvatar")
+  async deleteAvatar(_: void, ctx: JobContext) { /* ... */ }
+}
+
+export const profile = new ProfileService(api);     // registers the handlers
+
+// Enqueue by passing the method itself; the payload type comes from the method.
+queue.enqueue(profile.update, { displayName: "Ada" });
+queue.enqueue(profile.update, { bio: "hi" }, { delayMs: 2000 });   // plus options
+      </script>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Method kind</th><th>Registered when</th><th><code>this</code></th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Instance method</td><td>Each time the class is instantiated</td><td>That instance</td></tr>
+            <tr><td><code>static</code> method</td><td>Once, when the class is defined</td><td>The class</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn">
+        <strong class="label">One instance per class</strong>
+        <p>
+          A job type maps to exactly one handler. If you create several instances, the last one
+          wins and receives every job, including jobs enqueued through earlier instances. Keep a
+          singleton, or use <code>static</code> methods. With <code>strict: true</code> the second
+          instance throws instead (see <a href="#duplicate-names">duplicate names</a>).
+        </p>
+      </div>
+      <p>
+        Enqueueing a method that is not decorated throws:
+        <code>enqueue: method is not decorated with @queue.handler</code>.
+      </p>
+
+      <h2 id="handlers">Handlers</h2>
+      <p>
+        A handler is <code>(payload, ctx) =&gt; unknown</code>. The return value is ignored: a job
+        has no result. Success means the handler returned or its promise resolved. Failure means it
+        threw or rejected.
+      </p>
+
+      <h3>Sync, async and generator forms</h3>
+      <script type="text/x-code" data-lang="ts">
+// 1. Sync: return normally to succeed, throw to retry.
+queue.define("writeLog", (entry: LogEntry) => {
+  database.insert(entry);
+});
+
+// 2. Async: resolve to succeed, reject to retry.
+queue.define("sync", async (_: void, { signal }) => {
+  await api.sync({ signal });
+});
+
+// 3. Generator: each `yield` is an abort checkpoint.
+queue.define("importContacts", async function* (batches: Batch[], { signal }) {
+  for (const batch of batches) {
+    await api.importBatch(batch, { signal });
+    yield;                          // stops here if the job was removed or timed out
+  }
+});
+      </script>
+      <p>
+        Generators (<code>function*</code> and <code>async function*</code>) run to completion. If
+        the job is aborted, the generator is closed at the next <code>yield</code>, so
+        <code>finally</code> blocks run and resources are released. A generator that throws is
+        retried from the beginning.
+      </p>
+      <div class="callout note">
+        <strong class="label">Sync handlers cannot be interrupted</strong>
+        <p>
+          A long synchronous function blocks the thread until it returns, so neither the timeout
+          nor <code>remove()</code> can act in the middle. Prefer async or generator handlers for
+          anything slow.
+        </p>
+      </div>
+
+      <h3>The context (second argument)</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Field</th><th>Description</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>ctx.job</code></td><td>The job: <code>id</code>, <code>type</code>, <code>payload</code>, attempt counters, timestamps.</td></tr>
+            <tr><td><code>ctx.attempt</code></td><td>1-based attempt number. <code>1</code> on the first run.</td></tr>
+            <tr><td><code>ctx.signal</code></td><td>An <code>AbortSignal</code> that fires on timeout or when the job is removed.</td></tr>
+            <tr><td><code>ctx.progress(n)</code></td><td>Report progress from 0 to 1. Saved on <code>job.progress</code>.</td></tr>
+            <tr><td><code>ctx.detach(id)</code></td><td>Hand the work to a native task. <code>return</code> it. See <a href="background.html#native-tasks">Native tasks</a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>Using the AbortSignal</h3>
+      <p>Pass the signal to anything cancellable so the work really stops when the job is aborted.</p>
+      <script type="text/x-code" data-lang="ts">
+// fetch
+await fetch(url, { signal: ctx.signal });
+
+// axios
+await axios.post(url, body, { signal: ctx.signal });
+
+// your own code
+await new Promise<void>((resolve, reject) => {
+  const timer = setTimeout(resolve, 5000);
+  ctx.signal.addEventListener("abort", () => {
+    clearTimeout(timer);
+    reject(new Error("aborted"));
+  });
+});
+
+// polling
+if (ctx.signal.aborted) return;
+      </script>
+      <p>
+        Even if a handler ignores the signal, the queue stops waiting for it when the job times
+        out or is removed: the job's slot is freed and the outcome is decided without it. The
+        handler's code may keep running in the background, which is why using the signal matters.
+      </p>
+
+      <h3>Progress</h3>
+      <script type="text/x-code" data-lang="ts">
+queue.define("exportPdf", async ({ id }: { id: string }, { progress }) => {
+  const pages = await getPages(id);
+  for (let i = 0; i < pages.length; i++) {
+    await render(pages[i]);
+    progress((i + 1) / pages.length);      // clamped to 0..1, saved, UI updates
+  }
+});
+      </script>
+      <p>
+        Progress belongs to the current attempt: it resets when a new attempt starts, and calls
+        after the attempt has ended are ignored.
+      </p>
+
+      <h3>Read fresh state inside the handler</h3>
+      <p>
+        A job may run hours after it was enqueued. Do not put short-lived values like auth tokens in
+        the payload. Read them when the handler runs.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+queue.define("postComment", async (c: { postId: string; text: string }, { signal }) => {
+  const token = await auth.getFreshToken();          // not in the payload
+  await api.post(`/posts/${c.postId}/comments`, c, { token, signal });
+});
+      </script>
+
+      <h2 id="errors">Errors and what they do</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>You throw</th><th>Result</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Any <code>Error</code></td><td>Counts as a failed attempt. Retried after the exponential backoff until <code>maxAttempts</code>.</td></tr>
+            <tr><td><code>NonRetryableError</code></td><td>The job becomes <code>failed</code> immediately. No retries.</td></tr>
+            <tr><td><code>RetryAfterError(ms)</code></td><td>Counts as a failed attempt but waits exactly <code>ms</code> instead of the backoff.</td></tr>
+            <tr><td>A non-Error (string, object)</td><td>Treated like an Error. <code>String(value)</code> becomes <code>lastError</code>.</td></tr>
+            <tr><td>(timeout)</td><td>The queue rejects with <code>TimeoutError</code> after <code>timeoutMs</code>. Retried.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <script type="text/x-code" data-lang="ts">
+import { NonRetryableError, RetryAfterError, parseRetryAfter } from "@nijatk/react-native-queuekit";
+
+queue.define("submitOrder", async (order: Order, { job, signal }) => {
+  const res = await fetch("/orders", {
+    method: "POST",
+    signal,
+    headers: { "Idempotency-Key": job.id },
+    body: JSON.stringify(order),
+  });
+  if (res.ok) return;
+
+  if (res.status === 429) {
+    const wait = parseRetryAfter(res.headers.get("Retry-After"));
+    if (wait !== undefined) throw new RetryAfterError(wait, "rate limited");
+  }
+  if (res.status >= 400 && res.status < 500 && res.status !== 408 && res.status !== 429) {
+    throw new NonRetryableError(`HTTP ${res.status}`);   // a retry cannot fix a 4xx
+  }
+  throw new Error(`HTTP ${res.status}`);                  // 5xx / network: retry
+});
+      </script>
+      <p>
+        There is a complete table of what to retry in
+        <a href="reliability.html#classifying-failures">Classifying failures</a>.
+      </p>
+
+      <h2 id="payloads">Payload rules</h2>
+      <p>
+        The payload is stored as JSON. Anything <code>JSON.stringify</code> cannot round-trip is
+        lost or changed.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Do not put in a payload</th><th>Do this instead</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>Date</code></td><td>An ISO string or epoch milliseconds. A Date comes back as a string.</td></tr>
+            <tr><td><code>Map</code>, <code>Set</code>, class instances</td><td>Plain objects and arrays.</td></tr>
+            <tr><td>Functions, <code>undefined</code> values, symbols</td><td>They are dropped. Send explicit values.</td></tr>
+            <tr><td><code>NaN</code>, <code>Infinity</code></td><td>Become <code>null</code>. Avoid.</td></tr>
+            <tr><td>File or image bytes, large base64 blobs</td><td>Save the file to the app's storage and put its <em>path</em> in the payload. Payloads over <code>maxPayloadBytes</code> (default 64 KB) make <code>enqueue()</code> throw.</td></tr>
+            <tr><td>Auth tokens and other short-lived secrets</td><td>Read them when the handler runs. If a payload must hold something private, enqueue with <code>sensitive: true</code> and use an <a href="storage.html#secrets">encrypted storage</a>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Keep payloads small: they are rewritten to storage on every state change of the job. Put
+        IDs and references in them, not data you can look up.
+      </p>
+      <p>
+        In development builds (<code>__DEV__</code>), a payload with a key containing
+        <code>token</code>, <code>password</code>, <code>secret</code> or <code>authorization</code>
+        logs a one-time warning. <code>sensitive: true</code> silences it and hides the payload (and
+        the handler's result) from <code>on()</code> and <code>observe()</code> listeners, so it
+        cannot reach logs or analytics. The handler still receives it, and it is still stored.
+      </p>
+
+      <h2 id="enqueue-options">Enqueue options</h2>
+      <p>
+        Every option works at the call site (<code>queue.enqueue</code> or a defined job) and as a
+        default in <code>define()</code> or <code>@queue.handler</code>.
+      </p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Option</th><th>Default</th><th>Effect</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>id</code></td><td>generated</td><td>Use your own id. If a job with that id exists, it is returned and nothing is added.</td></tr>
+            <tr><td><code>priority</code></td><td><code>0</code></td><td>Higher runs first. Negative numbers are allowed.</td></tr>
+            <tr><td><code>maxAttempts</code></td><td>queue's <code>retry.maxAttempts</code> (5)</td><td>Total attempts before the job becomes <code>failed</code>.</td></tr>
+            <tr><td><code>delayMs</code></td><td><code>0</code></td><td>Do not start before this many ms from now.</td></tr>
+            <tr><td><code>ttlMs</code></td><td>none</td><td>Drop the job if it is still pending after this long. Emits <code>expired</code>.</td></tr>
+            <tr><td><code>orderKey</code></td><td>none</td><td>Jobs with the same key run one at a time, oldest first, even across retries. See <a href="reliability.html#ordering">ordering</a>.</td></tr>
+            <tr><td><code>timeoutMs</code></td><td>queue's</td><td>Attempt timeout for this job.</td></tr>
+            <tr><td><code>sensitive</code></td><td><code>false</code></td><td>Hide the payload from event listeners and <code>observe()</code>. See <a href="#payloads">payload rules</a>.</td></tr>
+            <tr><td><code>retry</code></td><td>queue's</td><td>Partial retry policy for this job, e.g. <code>{ maxAttempts: 10 }</code>.</td></tr>
+            <tr><td><code>requiresNetwork</code></td><td><code>true</code></td><td>Hold the job until the device is online.</td></tr>
+            <tr><td><code>dedupeKey</code></td><td>none</td><td>Skip enqueueing if a non-failed job with this key exists; return that one.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>id</h3>
+      <script type="text/x-code" data-lang="ts">
+// The client generates the id, so a double tap or a retry after a crash cannot
+// create two orders. The same id also works as your server's idempotency key.
+const orderId = uuid();
+submitOrder(order, { id: orderId });
+submitOrder(order, { id: orderId });    // returns the existing job
+      </script>
+
+      <h3>priority</h3>
+      <script type="text/x-code" data-lang="ts">
+trackEvent({ name: "screen_view" }, { priority: -10 });   // can wait
+sendMessage({ chatId, text }, { priority: 10 });          // user-visible, go first
+      </script>
+
+      <h3>maxAttempts</h3>
+      <script type="text/x-code" data-lang="ts">
+trackEvent(event, { maxAttempts: 20 });           // keep trying for a long time
+submitPayment(payment, { maxAttempts: 1 });       // one shot: fail visibly instead of retrying
+      </script>
+
+      <h3>delayMs</h3>
+      <script type="text/x-code" data-lang="ts">
+syncProfile({}, { delayMs: 5_000 });              // debounce-style delay
+sendFollowUp({ userId }, { delayMs: 24 * 60 * 60 * 1000 });
+      </script>
+      <div class="callout note">
+        <strong class="label">Delays need the app running</strong>
+        <p>
+          A delayed job runs when its time comes if the app is alive, or on the next launch /
+          background window after that. It is not a replacement for scheduled local notifications.
+        </p>
+      </div>
+
+      <h3>ttlMs</h3>
+      <script type="text/x-code" data-lang="ts">
+// A check-in is only meaningful for 10 minutes. After that, drop it.
+checkIn({ placeId }, { ttlMs: 10 * 60 * 1000 });
+
+queue.on("expired", (job) => console.log("dropped stale job", job.type, job.id));
+      </script>
+      <p>
+        Expiry works while offline and while the job waits for a retry. Running jobs are never
+        expired. Calling <code>retry(id)</code> on a failed job clears its deadline.
+      </p>
+
+      <h3>requiresNetwork</h3>
+      <script type="text/x-code" data-lang="ts">
+queue.define("generateThumbnail", makeThumbnail, { requiresNetwork: false });  // runs offline
+queue.define("uploadPhoto", uploadHandler);                                     // waits for network
+      </script>
+
+      <h3>dedupeKey</h3>
+      <script type="text/x-code" data-lang="ts">
+// Tapping "Sync" ten times queues one sync.
+sync({}, { dedupeKey: "full-sync" });
+sync({}, { dedupeKey: "full-sync" });   // returns the pending job
+
+// Picking the same photo twice uploads it once.
+uploadPhoto({ uri, albumId }, { dedupeKey: uri });
+      </script>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th></th><th><code>id</code></th><th><code>dedupeKey</code></th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Purpose</td><td>Identify one specific job</td><td>Collapse "the same intent"</td></tr>
+            <tr><td>Matches</td><td>Any job with that id, in any state</td><td>Non-failed jobs only</td></tr>
+            <tr><td>After the job fails</td><td>Still returns the failed job</td><td>A new job can be enqueued</td></tr>
+            <tr><td>After the job completes</td><td>A new job with that id is created (the old one is deleted)</td><td>Same</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h2 id="job-object">What enqueue returns</h2>
+      <p>
+        A synchronous snapshot of the stored <a href="reference.html#job">Job</a>. It does not
+        update later. Use <a href="react.html">hooks</a>, <code>getJobs()</code> or
+        <a href="control.html#events">events</a> to follow a job.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const job = uploadPhoto({ uri, albumId });
+// {
+//   id: "mvv7ritt-ctc0okh7", type: "uploadPhoto", payload: { uri, albumId },
+//   status: "pending", priority: 5, attempts: 0, maxAttempts: 5,
+//   createdAt: 1767225600000, runAt: 1767225600000, requiresNetwork: true
+// }
+      </script>
+    </article>
+  </body>
+</html>

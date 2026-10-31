@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Start, stop, retry, remove, flush and drain a QueueKit queue; inspect jobs and stats; listen to events and connect analytics tools." />
+    <title>Control and observe - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Control and observe</h1>
+      <p class="lead">
+        Start and stop the queue, retry and cancel jobs, wait for it to go idle, read its state and
+        listen to everything that happens.
+      </p>
+
+      <h2 id="start-stop">Start, stop, dispose</h2>
+      <script type="text/x-code" data-lang="ts">
+const queue = createQueue({ storage, autoStart: false });   // default is true
+
+queue.start();    // begin processing and listening for connectivity changes
+queue.stop();     // stop picking up new jobs; running jobs finish
+queue.start();    // resume
+queue.dispose();  // stop and drop all listeners; stored jobs are kept
+      </script>
+      <ul>
+        <li><code>start()</code> and <code>stop()</code> are idempotent. Calling <code>start()</code> twice does nothing the second time.</li>
+        <li><code>stop()</code> does <strong>not</strong> abort running jobs. Use <code>remove(id)</code> for that.</li>
+        <li>A stopped queue still accepts <code>enqueue()</code>. Jobs are saved and wait.</li>
+        <li><code>dispose()</code> is for tests and hot reload. Stored jobs are untouched.</li>
+      </ul>
+      <p>Good reasons to stop a queue: the user signed out, a remote kill switch, or a circuit breaker after a server outage (see <a href="recipes-network.html#circuit-breaker">the recipe</a>).</p>
+
+      <h2 id="job-control">retry, remove, clear</h2>
+      <script type="text/x-code" data-lang="ts">
+queue.retry(id);    // failed -> pending with a fresh attempt budget. Returns false if not failed.
+queue.remove(id);   // delete a job in any state. Running jobs are aborted. Returns false if unknown.
+queue.clear();      // remove every job, aborting any that are running
+      </script>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Call</th><th>On a pending job</th><th>On an active job</th><th>On a failed job</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>retry(id)</code></td><td>returns <code>false</code></td><td>returns <code>false</code></td><td>requeued, attempts reset, deadline cleared</td></tr>
+            <tr><td><code>remove(id)</code></td><td>deleted</td><td>aborted (<code>ctx.signal</code> fires), then deleted</td><td>deleted</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout note">
+        <strong class="label">Removing a detached job</strong>
+        <p>
+          <code>remove()</code> deletes the job but cannot stop a native task that is already
+          running. Cancel the native task yourself as well. See
+          <a href="background.html#native-tasks">Native tasks</a>.
+        </p>
+      </div>
+
+      <h2 id="flush-drain">flush and drain</h2>
+      <p>
+        <code>flush()</code> re-reads connectivity and starts everything due right now. Call it
+        when the app returns to the foreground, because timers and network events may have been
+        missed while it was suspended. <code>flushOnForeground</code> does that for you:
+      </p>
+      <script type="text/x-code" data-lang="ts">
+import { AppState } from "react-native";
+import { flushOnForeground } from "@nijatk/react-native-queuekit";
+
+const stop = flushOnForeground(queue, AppState);   // returns an unsubscribe function
+      </script>
+      <p>
+        <code>drain({ timeoutMs })</code> flushes, then waits until the queue has nothing left it
+        can do right now. It resolves <code>true</code> when idle and <code>false</code> if the
+        timeout ran out first.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const idle = await queue.drain({ timeoutMs: 20_000 });
+if (!idle) console.log("ran out of time; the rest will run later");
+      </script>
+      <p><code>drain</code> does not wait for jobs that cannot run right now:</p>
+      <ul>
+        <li>jobs blocked because the device is offline,</li>
+        <li>jobs with no registered handler,</li>
+        <li>jobs detached to a native task,</li>
+        <li>with <code>timeoutMs</code>: jobs whose start time (a delay or backoff) is after the timeout.</li>
+      </ul>
+      <p>
+        It is made for <a href="background.html">background tasks</a>, and it is also the easiest
+        way to write tests: <code>await queue.drain()</code> then assert (see
+        <a href="storage.html#testing">Testing</a>).
+      </p>
+
+      <h2 id="reading-state">Reading state</h2>
+      <h3>getJobs</h3>
+      <script type="text/x-code" data-lang="ts">
+queue.getJobs();                                    // all jobs, oldest first
+queue.getJobs({ status: "failed" });                // only failed
+queue.getJobs({ type: "uploadPhoto" });             // only one type
+queue.getJobs({ status: "pending", type: "sync" }); // both must match
+      </script>
+      <p>
+        Without a filter, the <em>same array</em> is returned until something changes, so it is
+        safe as a React snapshot. Filtered results are new arrays each call.
+      </p>
+      <h3>getStats</h3>
+      <script type="text/x-code" data-lang="ts">
+queue.getStats();   // { pending: 3, active: 1, failed: 0, total: 4 }
+      </script>
+      <p>Also referentially stable until something changes.</p>
+      <h3>subscribe</h3>
+      <script type="text/x-code" data-lang="ts">
+const unsubscribe = queue.subscribe(() => {
+  console.log("something changed", queue.getStats());
+});
+      </script>
+      <p>
+        The listener runs after <em>any</em> change to any job, with no arguments. It is exactly the
+        contract <code>useSyncExternalStore</code> needs, which is how the
+        <a href="react.html">React hooks</a> are built.
+      </p>
+
+      <h2 id="events">Events</h2>
+      <p>Six moments in a job's life emit an event.</p>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Event</th><th>When</th><th>Extra</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>enqueued</code></td><td>A job was added.</td><td></td></tr>
+            <tr><td><code>started</code></td><td>An attempt began.</td><td></td></tr>
+            <tr><td><code>completed</code></td><td>The handler succeeded and the job was deleted. Also fired by <code>complete(id)</code> for detached jobs.</td><td><code>durationMs</code></td></tr>
+            <tr><td><code>retry</code></td><td>An attempt failed and another is scheduled.</td><td><code>error</code>, <code>durationMs</code></td></tr>
+            <tr><td><code>failed</code></td><td>The job gave up.</td><td><code>error</code>, <code>durationMs</code></td></tr>
+            <tr><td><code>expired</code></td><td>A pending job outlived its <code>ttlMs</code>.</td><td></td></tr>
+            <tr><td><code>removed</code></td><td>Deleted by <code>remove()</code>, <code>clear()</code> or <code>retention</code>.</td><td></td></tr>
+            <tr><td><code>requeued</code></td><td>Connectivity dropped mid-attempt; the job went back to pending without using an attempt.</td><td></td></tr>
+          </tbody>
+        </table>
+      </div>
+      <p>
+        Not every transition emits one: an offline requeue (connectivity lost mid-run) is silent,
+        and <code>remove()</code> emits nothing.
+      </p>
+      <div class="callout warn">
+        <strong class="label">Attach listeners before the queue starts</strong>
+        <p>
+          A queue created with the default <code>autoStart: true</code> processes saved jobs
+          immediately, so events from that first pass (a job that expired while the app was closed,
+          interrupted jobs starting again) fire before you can attach a listener. To see them, create
+          the queue with <code>autoStart: false</code>, attach your <code>on</code> / <code>observe</code>
+          listeners, then call <code>queue.start()</code>.
+        </p>
+      </div>
+      <script type="text/x-code" data-lang="ts">
+const queue = createQueue({ storage, network, autoStart: false });
+queue.observe(report);       // sees everything, including the first pass
+queue.start();
+      </script>
+
+      <h3>on: one event</h3>
+      <script type="text/x-code" data-lang="ts">
+const off = queue.on("failed", (job, error) => {
+  console.warn(`gave up on ${job.type} after ${job.attempts} attempts`, error);
+});
+off();   // stop listening
+      </script>
+
+      <h3>observe: every event, with duration</h3>
+      <script type="text/x-code" data-lang="ts">
+queue.observe(({ event, job, error, durationMs }) => {
+  // event: "enqueued" | "started" | "completed" | "retry" | "failed" | "expired" | "removed" | "requeued"
+  // durationMs: how long the attempt ran (completed / retry / failed only)
+});
+      </script>
+      <p>
+        <code>durationMs</code> is measured for attempts run in this process. It is missing for
+        events that are not an attempt end, and for detached jobs finished with
+        <code>complete()</code> or <code>fail()</code>.
+      </p>
+      <div class="callout note">
+        <strong class="label">Listener safety</strong>
+        <p>
+          An error thrown by a listener or observer is swallowed so it can never break the queue.
+          Do your own try/catch if you need to know about it.
+        </p>
+      </div>
+
+      <h2 id="analytics">Connecting analytics and crash tools</h2>
+      <p>
+        <code>observe</code> maps directly onto any analytics SDK. Nothing in QueueKit depends on
+        them: you attach the one you use.
+      </p>
+      <div class="tabs">
+        <div class="tab-list">
+          <button type="button">Firebase</button>
+          <button type="button">App Insights</button>
+          <button type="button">Sentry</button>
+          <button type="button">Console</button>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts">
+import analytics from "@react-native-firebase/analytics";
+import crashlytics from "@react-native-firebase/crashlytics";
+
+queue.observe(({ event, job, error, durationMs }) => {
+  void analytics().logEvent(`queue_${event}`, {      // names: letters, digits, underscore
+    type: job.type,
+    attempts: job.attempts,
+    duration_ms: durationMs ?? 0,                   // params cannot be undefined
+  });
+  if (event === "failed") crashlytics().recordError(error as Error);
+});
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts">
+queue.observe(({ event, job, error, durationMs }) => {
+  appInsights.trackEvent({
+    name: `Queue.${event}`,
+    properties: { type: job.type, jobId: job.id },
+    measurements: { attempts: job.attempts, durationMs: durationMs ?? 0 },
+  });
+  if (event === "failed") {
+    appInsights.trackException({ exception: error as Error, properties: { type: job.type } });
+  }
+});
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts">
+import * as Sentry from "@sentry/react-native";
+
+queue.on("retry", (job) =>
+  Sentry.addBreadcrumb({ category: "queue", message: `retry ${job.type}`, data: { attempts: job.attempts } }));
+
+queue.on("failed", (job, error) =>
+  Sentry.captureException(error, { tags: { jobType: job.type }, extra: { jobId: job.id, payload: job.payload } }));
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts">
+if (__DEV__) {
+  queue.observe(({ event, job, error, durationMs }) => {
+    console.log(`[queue] ${event} ${job.type}#${job.id}`, { attempts: job.attempts, durationMs, error });
+  });
+}
+          </script>
+        </div>
+      </div>
+      <div class="callout warn">
+        <strong class="label">Mind the payload</strong>
+        <p>Payloads may hold personal data. Send ids and types to analytics, not whole payloads.</p>
+      </div>
+      <div class="callout warn">
+        <strong class="label">Avoid feedback loops</strong>
+        <p>
+          If you send analytics <em>through</em> the queue, do not enqueue a new analytics job from
+          inside an observer for every event, or each job will create another.
+        </p>
+      </div>
+
+      <h3>Simple metrics</h3>
+      <script type="text/x-code" data-lang="ts">
+const counts = { completed: 0, failed: 0, retry: 0 } as Record<string, number>;
+const slow: number[] = [];
+
+queue.observe(({ event, durationMs }) => {
+  if (event in counts) counts[event]++;
+  if (event === "completed" && durationMs) slow.push(durationMs);
+});
+      </script>
+
+      <h2 id="debugging">Debugging</h2>
+      <script type="text/x-code" data-lang="ts">
+console.table(
+  queue.getJobs().map((j) => ({
+    id: j.id, type: j.type, status: j.status, attempts: `${j.attempts}/${j.maxAttempts}`,
+    runIn: Math.max(0, j.runAt - Date.now()), error: j.lastError, ext: j.externalId,
+  })),
+);
+      </script>
+      <p>
+        A job that never runs is almost always one of: no handler registered, offline with
+        <code>requiresNetwork</code>, a rate or concurrency limit, a future <code>runAt</code>, or a
+        stopped queue. The <a href="faq.html#jobs-are-not-running">checklist in the FAQ</a> walks
+        through each.
+      </p>
+    </article>
+  </body>
+</html>

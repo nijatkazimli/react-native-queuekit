@@ -1,0 +1,280 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="QueueKit React hooks: QueueProvider, useQueue, useJobs, useJob and useQueueStats, with UI examples." />
+    <title>React hooks - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>React hooks</h1>
+      <p class="lead">
+        Live job status for your UI. The hooks are a thin layer over
+        <code>queue.subscribe()</code> using <code>useSyncExternalStore</code>, so they are
+        tear-free and re-render only when jobs change.
+      </p>
+      <p>
+        Import from the separate entry point, so the core stays free of React:
+        <code>import { ... } from "@nijatk/react-native-queuekit/react"</code>. React 18 or newer is required.
+      </p>
+
+      <h2 id="provider">QueueProvider</h2>
+      <script type="text/x-code" data-lang="tsx" data-title="App.tsx">
+import { QueueProvider } from "@nijatk/react-native-queuekit/react";
+import { queue } from "./queue";
+
+export default function App() {
+  return (
+    <QueueProvider queue={queue}>
+      <Navigation />
+    </QueueProvider>
+  );
+}
+      </script>
+      <p>
+        The provider only makes the queue available to hooks. It does not start or stop it: the
+        queue starts when created (unless <code>autoStart: false</code>).
+      </p>
+
+      <h2>Hooks</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Hook</th><th>Returns</th></tr>
+          </thead>
+          <tbody>
+            <tr><td><code>useQueue()</code></td><td>The queue. Throws outside a provider: <code>useQueue must be used inside &lt;QueueProvider&gt;</code>.</td></tr>
+            <tr><td><code>useJobs(filter?)</code></td><td>Live array of jobs, oldest first. Filter by <code>status</code> and/or <code>type</code>.</td></tr>
+            <tr><td><code>useJob(id)</code></td><td>One job, or <code>undefined</code> once it completes or is removed.</td></tr>
+            <tr><td><code>useQueueStats()</code></td><td><code>{ pending, active, failed, total }</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <h3>useQueue</h3>
+      <script type="text/x-code" data-lang="tsx">
+function RetryButton({ id }: { id: string }) {
+  const queue = useQueue();
+  return <Button title="Retry" onPress={() => queue.retry(id)} />;
+}
+      </script>
+
+      <h3>useJobs</h3>
+      <script type="text/x-code" data-lang="tsx">
+const all = useJobs();
+const failed = useJobs({ status: "failed" });
+const uploads = useJobs({ type: uploadPhoto.type });
+const stuck = useJobs({ status: "pending", type: "sync" });
+      </script>
+      <p>
+        The filter's fields are compared by value, so passing a fresh object literal on each render
+        is fine and does not cause extra work.
+      </p>
+
+      <h3>useJob</h3>
+      <script type="text/x-code" data-lang="tsx">
+function MessageStatus({ jobId }: { jobId: string }) {
+  const job = useJob(jobId);
+  if (!job) return <Text>Sent</Text>;               // completed jobs are deleted
+  if (job.status === "failed") return <Text>Failed: {job.lastError}</Text>;
+  if (job.status === "active") return <Text>Sending...</Text>;
+  return <Text>Waiting for network</Text>;
+}
+      </script>
+      <div class="callout note">
+        <strong class="label">"No job" means done, or removed</strong>
+        <p>
+          A finished job is deleted, so <code>useJob</code> cannot tell success from "never
+          existed". If you must tell them apart, remember the id when you enqueue, as above, or
+          listen for the <code>completed</code> event.
+        </p>
+      </div>
+
+      <h3>useQueueStats</h3>
+      <script type="text/x-code" data-lang="tsx">
+const { pending, active, failed, total } = useQueueStats();
+      </script>
+
+      <h2 id="components">Ready-made components</h2>
+
+      <h3>Sync banner</h3>
+      <script type="text/x-code" data-lang="tsx" data-title="SyncBanner.tsx">
+import { useJobs, useQueue, useQueueStats } from "@nijatk/react-native-queuekit/react";
+
+export function SyncBanner() {
+  const queue = useQueue();
+  const { pending, active, failed } = useQueueStats();
+  const failedJobs = useJobs({ status: "failed" });
+  const waiting = pending + active;
+
+  if (waiting + failed === 0) return null;          // hidden when idle
+
+  return (
+    <View style={styles.banner}>
+      <Text style={{ flex: 1 }}>
+        {failed > 0
+          ? `${failed} item${failed > 1 ? "s" : ""} couldn't sync`
+          : `Syncing ${waiting} item${waiting > 1 ? "s" : ""}...`}
+      </Text>
+      {failed > 0 && (
+        <Button
+          title="Retry all"
+          onPress={() => {
+            for (const job of failedJobs) queue.retry(job.id);
+          }}
+        />
+      )}
+    </View>
+  );
+}
+      </script>
+
+      <h3>Upload list with progress, retry and cancel</h3>
+      <script type="text/x-code" data-lang="tsx" data-title="PhotoUploads.tsx">
+import { useJobs, useQueue } from "@nijatk/react-native-queuekit/react";
+import { uploadPhoto } from "./features/uploads";
+
+const LABEL = { pending: "Waiting", active: "Uploading", failed: "Failed" } as const;
+
+export function PhotoUploads() {
+  const queue = useQueue();
+  const uploads = useJobs({ type: uploadPhoto.type });
+
+  return (
+    <FlatList
+      data={uploads}
+      keyExtractor={(job) => job.id}
+      renderItem={({ item }) => (
+        <View style={styles.row}>
+          <Image source={{ uri: (item.payload as { uri: string }).uri }} style={styles.thumb} />
+          <View style={{ flex: 1 }}>
+            <Text>{LABEL[item.status]}</Text>
+            {item.status === "active" && item.progress !== undefined && (
+              <View style={styles.track}>
+                <View style={[styles.fill, { width: `${item.progress * 100}%` }]} />
+              </View>
+            )}
+            {item.lastError && <Text style={styles.error}>{item.lastError}</Text>}
+          </View>
+          {item.status === "failed" && <Button title="Retry" onPress={() => queue.retry(item.id)} />}
+          <Button title="Cancel" onPress={() => queue.remove(item.id)} />
+        </View>
+      )}
+    />
+  );
+}
+      </script>
+
+      <h3>Tab badge</h3>
+      <script type="text/x-code" data-lang="tsx">
+function OutboxTabIcon() {
+  const { total } = useQueueStats();
+  return <Badge count={total} />;
+}
+      </script>
+
+      <h3>Show pending items inline (optimistic list)</h3>
+      <script type="text/x-code" data-lang="tsx">
+function Comments({ postId }: { postId: string }) {
+  const { data: comments = [] } = useComments(postId);          // from your server cache
+  const outgoing = useJobs({ type: addComment.type })
+    .filter((job) => (job.payload as NewComment).postId === postId);
+
+  return (
+    <>
+      {comments.map((c) => <Comment key={c.id} {...c} />)}
+      {outgoing.map((job) => (
+        <Comment
+          key={job.id}
+          text={(job.payload as NewComment).text}
+          dimmed
+          badge={job.status === "failed" ? "Failed" : "Sending..."}
+        />
+      ))}
+    </>
+  );
+}
+      </script>
+
+      <h2 id="custom-hooks">Writing your own hooks</h2>
+
+      <h3>Run code on queue events</h3>
+      <script type="text/x-code" data-lang="tsx">
+import { useEffect } from "react";
+import { useQueue } from "@nijatk/react-native-queuekit/react";
+import type { Job, QueueEvent } from "@nijatk/react-native-queuekit";
+
+export function useQueueEvent(event: QueueEvent, handler: (job: Job, error?: unknown) => void) {
+  const queue = useQueue();
+  useEffect(() => queue.on(event, handler), [queue, event, handler]);   // on() returns the cleanup
+}
+
+// Usage: toast when an upload finishes while this screen is open.
+useQueueEvent("completed", useCallback((job) => {
+  if (job.type === uploadPhoto.type) toast("Photo uploaded");
+}, []));
+      </script>
+
+      <h3>Is anything of this type in flight?</h3>
+      <script type="text/x-code" data-lang="tsx">
+export function useIsSyncing(type: string) {
+  return useJobs({ type }).some((job) => job.status === "active");
+}
+      </script>
+
+      <h2 id="without-provider">Without the provider</h2>
+      <p>
+        Hooks need the provider only to find the queue. In a module that already imports it, use
+        <code>useSyncExternalStore</code> directly:
+      </p>
+      <script type="text/x-code" data-lang="tsx">
+import { useSyncExternalStore } from "react";
+import { queue } from "./queue";
+
+export const useOutbox = () =>
+  useSyncExternalStore(queue.subscribe, () => queue.getJobs());   // getJobs() is snapshot-stable
+      </script>
+
+      <h2 id="performance">Performance notes</h2>
+      <ul>
+        <li>Components re-render on <em>any</em> job change. Scope hooks narrowly: a list screen uses <code>useJobs({ type })</code>, a badge uses <code>useQueueStats()</code>.</li>
+        <li>Progress updates write to storage and notify subscribers on every <code>progress()</code> call. Throttle in the handler if your source reports hundreds of events per second: report every 1% or every 250 ms.</li>
+        <li><code>useJob(id)</code> scans the job list. It is perfect for individual rows, but for thousands of jobs prefer one <code>useJobs</code> at the list level and pass jobs down.</li>
+        <li>Use <code>React.memo</code> for rows keyed by <code>job.id</code>. A job object is replaced when it changes, so unchanged rows keep their reference.</li>
+      </ul>
+      <script type="text/x-code" data-lang="ts">
+queue.define("download", async (file: FileRef, { progress }) => {
+  let last = 0;
+  await download(file, (fraction) => {
+    if (fraction - last >= 0.01 || fraction === 1) {     // at most ~100 updates
+      last = fraction;
+      progress(fraction);
+    }
+  });
+});
+      </script>
+
+      <h2 id="testing-components">Testing components</h2>
+      <p>
+        Create a queue with <code>memoryStorage()</code> and <code>autoStart: false</code>, enqueue
+        jobs, and render inside a provider. Wrap queue changes in <code>act()</code>.
+      </p>
+      <script type="text/x-code" data-lang="tsx">
+import { act } from "react";
+import { createRoot } from "react-dom/client";
+import { createQueue, memoryStorage } from "@nijatk/react-native-queuekit";
+import { QueueProvider } from "@nijatk/react-native-queuekit/react";
+
+const queue = createQueue({ storage: memoryStorage(), autoStart: false });
+const root = createRoot(document.createElement("div"));
+
+act(() => root.render(<QueueProvider queue={queue}><SyncBanner /></QueueProvider>));
+act(() => void queue.enqueue("a", {}));          // banner now shows "Syncing 1 item..."
+      </script>
+    </article>
+  </body>
+</html>

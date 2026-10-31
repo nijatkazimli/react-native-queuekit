@@ -1,0 +1,235 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Run QueueKit jobs when the app returns to the foreground, inside OS background tasks, and hand large uploads to native uploaders with detach." />
+    <title>Background and native tasks - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Background and native tasks</h1>
+      <p class="lead">
+        A JavaScript queue only runs while JavaScript runs. This page explains what that means on a
+        phone, and the three layers QueueKit gives you to make jobs finish anyway.
+      </p>
+
+      <h2 id="reality">What actually runs when</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>App state</th><th>JavaScript</th><th>The queue</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Foreground</td><td>Runs</td><td>Runs normally.</td></tr>
+            <tr><td>Just backgrounded</td><td>The OS usually allows a short grace period (seconds)</td><td>Jobs in flight may finish. New ones may not get time.</td></tr>
+            <tr><td>Suspended in the background</td><td>Frozen. Timers do not fire.</td><td>Paused. Backoff timers resume when the app wakes.</td></tr>
+            <tr><td>Woken by the OS for a background task</td><td>Runs for a short window you do not control</td><td>You can <code>drain()</code> inside it.</td></tr>
+            <tr><td>Terminated by the system</td><td>Not running</td><td>Jobs are safe in storage and continue on next launch (or next background wake).</td></tr>
+            <tr><td>Force-quit by the user</td><td>Not running. iOS generally will not wake the app for background tasks until the user opens it again.</td><td>Waits for next launch.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn">
+        <strong class="label">Background execution is best effort</strong>
+        <p>
+          iOS and Android decide when, and whether, background work runs, based on battery, usage
+          patterns, Low Power Mode, Doze and vendor-specific rules. Treat everything in layers 2
+          and 3 as "helps in practice", never as a guarantee. Layer 1 and the native tasks in layer
+          4 are the dependable ones.
+        </p>
+      </div>
+
+      <h2 id="layer-1">Layer 1: catch up when the app returns</h2>
+      <p>
+        While the app was suspended, timers did not fire and connectivity may have changed without
+        the queue noticing. <code>flush()</code> re-reads connectivity and starts whatever is due.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+import { AppState } from "react-native";
+import { flushOnForeground } from "@nijatk/react-native-queuekit";
+
+// Once, at startup:
+flushOnForeground(queue, AppState);
+      </script>
+      <p>It calls <code>queue.flush()</code> every time the app state becomes <code>"active"</code>. It returns a function that stops listening.</p>
+
+      <h2 id="layer-2">Layer 2: periodic background tasks</h2>
+      <p>
+        Both platforms can wake your app now and then to do a little work. Inside that window,
+        <code>await queue.drain({ timeoutMs })</code> runs everything it can and returns when the queue
+        is idle or when your time budget is used up.
+      </p>
+      <div class="tabs">
+        <div class="tab-list">
+          <button type="button">Expo</button>
+          <button type="button">react-native-background-fetch</button>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts" data-title="background.ts">
+import * as BackgroundTask from "expo-background-task";
+import * as TaskManager from "expo-task-manager";
+import { queue } from "./queue";
+import "./features";   // the task has no UI, so register your handlers here too
+
+const TASK = "queuekit-drain";
+
+// Must be defined at module scope so the OS can start it without the UI.
+TaskManager.defineTask(TASK, async () => {
+  try {
+    await queue.drain({ timeoutMs: 20_000 });    // the OS gives roughly 30 seconds
+    return BackgroundTask.BackgroundTaskResult.Success;
+  } catch {
+    return BackgroundTask.BackgroundTaskResult.Failed;
+  }
+});
+
+export async function setupBackgroundSync() {
+  await BackgroundTask.registerTaskAsync(TASK, { minimumInterval: 15 });   // minutes
+}
+          </script>
+        </div>
+        <div class="panel">
+          <script type="text/x-code" data-lang="ts" data-title="background.ts">
+import BackgroundFetch from "react-native-background-fetch";
+import { queue } from "./queue";
+import "./features";
+
+export async function setupBackgroundSync() {
+  await BackgroundFetch.configure(
+    { minimumFetchInterval: 15 },                                  // minutes
+    async (taskId) => {
+      await queue.drain({ timeoutMs: 20_000 });
+      BackgroundFetch.finish(taskId);                              // always tell the OS you are done
+    },
+    (taskId) => BackgroundFetch.finish(taskId),                    // the OS is out of time
+  );
+}
+          </script>
+        </div>
+      </div>
+      <p>
+        These snippets show the pattern; check each library's current documentation for exact
+        option names and platform setup.
+      </p>
+      <h3>Rules of thumb</h3>
+      <ul>
+        <li><strong>Always pass <code>timeoutMs</code>.</strong> Finish a few seconds before the OS ends your window. <code>drain</code> returns <code>false</code> if time ran out.</li>
+        <li><strong>Import your job modules in the task file.</strong> The task may run without your UI, so a handler that was only registered by a screen will be missing and its jobs will not run.</li>
+        <li><strong>Handlers must be idempotent.</strong> A job still running when the OS kills the process runs again later.</li>
+        <li><strong><code>drain</code> ignores jobs that cannot run</strong> (offline, no handler, detached, due after your timeout), so it will not hold the window open for them.</li>
+        <li>Do not expect an exact schedule. Fifteen minutes is the minimum, not a promise.</li>
+      </ul>
+
+      <h2 id="layer-3">Layer 3: wake on a silent push</h2>
+      <p>
+        A silent (data-only) push notification can wake the app briefly on both platforms, again
+        best effort. Use the same pattern in its handler:
+      </p>
+      <script type="text/x-code" data-lang="ts">
+messaging().setBackgroundMessageHandler(async () => {
+  await queue.drain({ timeoutMs: 20_000 });
+});
+      </script>
+      <p>Use it to nudge devices to flush after something changed on your server, for example a new token or a "please sync" signal.</p>
+
+      <h2 id="native-tasks">Layer 4: native tasks with detach</h2>
+      <p>
+        For large uploads and downloads, do not run the transfer in JavaScript at all. Hand it to
+        the OS's own transfer service, which keeps going while the app is suspended and can finish
+        even if the app is terminated. QueueKit keeps tracking the job.
+      </p>
+
+      <h3>The flow</h3>
+      <ol>
+        <li>The handler starts the native transfer and gets a task id.</li>
+        <li>It returns <code>ctx.detach(taskId)</code>. The job stays <code>active</code> with <code>job.externalId = taskId</code>, frees its concurrency slot and has no timeout.</li>
+        <li>When the native task ends, you call <code>queue.complete(jobId)</code> or <code>queue.fail(jobId, error)</code>.</li>
+        <li><code>fail()</code> goes through the normal retry logic: the handler runs again (a fresh upload) or the job becomes <code>failed</code>.</li>
+        <li>After an app restart, detached jobs are still <code>active</code>. At startup, look them up and reattach listeners.</li>
+      </ol>
+
+      <script type="text/x-code" data-lang="ts" data-title="features/videos.ts">
+import { queue } from "../queue";
+
+function watch(jobId: string, uploadId: string) {
+  NativeUploader.onDone(uploadId, (res) =>
+    res.status < 400 ? queue.complete(jobId) : queue.fail(jobId, new Error(`HTTP ${res.status}`)));
+  NativeUploader.onError(uploadId, (e) => queue.fail(jobId, e));
+  NativeUploader.onCancelled(uploadId, () => queue.remove(jobId));
+}
+
+export const uploadVideo = queue.define("uploadVideo", async ({ path }: { path: string }, ctx) => {
+  const uploadId = await NativeUploader.start({
+    url: "https://api.example.com/videos",
+    path,
+    headers: { "Idempotency-Key": ctx.job.id },
+  });
+  watch(ctx.job.id, uploadId);
+  return ctx.detach(uploadId);          // return it: the queue now waits for complete() / fail()
+});
+
+// Call once at startup: reattach to uploads that were running when the app last closed.
+export function reattachUploads() {
+  for (const job of queue.getJobs({ type: uploadVideo.type, status: "active" })) {
+    if (job.externalId) watch(job.id, job.externalId);
+  }
+}
+      </script>
+      <p>
+        <code>NativeUploader</code> stands for whatever uploader you use
+        (<code>react-native-background-upload</code>, a native module of your own, and so on). The
+        pattern is the same: start, detach, report back.
+      </p>
+
+      <h3>Rules for detach</h3>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Topic</th><th>Behaviour</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Where to call it</td><td><code>return ctx.detach(id)</code> from a normal or async handler. It does not work from a generator handler.</td></tr>
+            <tr><td>Slot and timeout</td><td>The job releases its concurrency slot and has no timeout while detached.</td></tr>
+            <tr><td>Status</td><td><code>active</code>, with <code>externalId</code> set. <code>progress</code> is cleared when a new attempt starts.</td></tr>
+            <tr><td>Restart</td><td>Stays <code>active</code>, not re-run. You reattach.</td></tr>
+            <tr><td><code>complete(id)</code></td><td>Deletes the job and emits <code>completed</code>. Returns <code>false</code> if the job is unknown or not detached.</td></tr>
+            <tr><td><code>fail(id, error?)</code></td><td>Retries or fails the job like a thrown error would. The default message is "External task failed".</td></tr>
+            <tr><td><code>remove(id)</code></td><td>Deletes the job. You must also cancel the native task.</td></tr>
+            <tr><td><code>drain()</code></td><td>Does not wait for detached jobs.</td></tr>
+            <tr><td>Analytics</td><td><code>durationMs</code> is not reported for jobs finished by <code>complete()</code> / <code>fail()</code>.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <div class="callout warn">
+        <strong class="label">Finished while the app was dead</strong>
+        <p>
+          If the OS completed the transfer while your app was not running, nothing tells the queue.
+          Make sure your uploader reports pending results on next launch, or check your backend
+          for the object by its idempotency key, then call <code>complete()</code> or
+          <code>fail()</code>. Do this inside <code>reattachUploads()</code>.
+        </p>
+      </div>
+
+      <h3>Cancelling a detached upload</h3>
+      <script type="text/x-code" data-lang="ts">
+async function cancelUpload(job: Job) {
+  if (job.externalId) await NativeUploader.cancel(job.externalId);   // stop the transfer
+  queue.remove(job.id);                                              // then forget the job
+}
+      </script>
+
+      <h2 id="checklist">A sensible combination</h2>
+      <ol>
+        <li>Always: <code>flushOnForeground(queue, AppState)</code>.</li>
+        <li>Small jobs (API calls, forms): rely on the queue plus a periodic background <code>drain</code>.</li>
+        <li>Big files: <code>detach()</code> to a native uploader.</li>
+        <li>Make every handler idempotent, and always send <code>job.id</code> as an idempotency key.</li>
+        <li>Test with the app killed from the app switcher and with airplane mode toggled.</li>
+      </ol>
+    </article>
+  </body>
+</html>

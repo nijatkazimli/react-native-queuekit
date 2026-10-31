@@ -1,0 +1,297 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="QueueKit recipes for APIs and networking: REST helper, auth refresh, rate limits, Retry-After, GraphQL, analytics batching, TanStack Query and circuit breakers." />
+    <title>Recipes: APIs and networking - QueueKit</title>
+    <script>try{var t=localStorage.getItem("qk-theme")||(matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light");document.documentElement.dataset.theme=t}catch(e){}</script>
+    <link rel="stylesheet" href="assets/style.css" />
+    <script src="assets/app.js" defer></script>
+  </head>
+  <body>
+    <article>
+      <h1>Recipes: APIs and networking</h1>
+      <p class="lead">
+        Patterns for talking to servers from jobs: one shared request helper, authentication, rate
+        limits, GraphQL, batching, cache integration and protecting a struggling backend.
+      </p>
+
+      <h2 id="rest-helper">One shared request helper</h2>
+      <p>
+        Put the error classification in one place, so every job behaves the same. It sends an
+        idempotency key, honors <code>Retry-After</code>, and decides which failures are worth
+        retrying.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="api.ts">
+import { NonRetryableError, RetryAfterError, parseRetryAfter } from "@nijatk/react-native-queuekit";
+
+const API = "https://api.example.com";
+
+export async function request(
+  path: string,
+  { method = "POST", body, key, signal }: {
+    method?: string; body?: unknown; key?: string; signal?: AbortSignal;
+  } = {},
+) {
+  const token = await auth.getAccessToken();             // fresh on every attempt
+  const res = await fetch(`${API}${path}`, {
+    method,
+    signal,
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+      ...(key ? { "Idempotency-Key": key } : {}),
+    },
+    body: body === undefined ? undefined : JSON.stringify(body),
+  });
+  if (res.ok) return res;
+
+  const wait = parseRetryAfter(res.headers.get("Retry-After"));
+  if ((res.status === 429 || res.status === 503) && wait !== undefined) {
+    throw new RetryAfterError(wait, `HTTP ${res.status}`);
+  }
+  const transient = res.status === 408 || res.status === 429;
+  if (res.status >= 400 && res.status < 500 && !transient) {
+    throw new NonRetryableError(`HTTP ${res.status}: ${await res.text().catch(() => "")}`);
+  }
+  throw new Error(`HTTP ${res.status}`);                // 5xx, 408, 429 without header: retry
+}
+
+export const post = (path: string, body: unknown, o: { key?: string; signal?: AbortSignal } = {}) =>
+  request(path, { body, ...o });
+      </script>
+      <p>Every job then reads like this:</p>
+      <script type="text/x-code" data-lang="ts">
+export const renameProject = queue.define("renameProject", (p: { id: string; name: string }, { job, signal }) =>
+  request(`/projects/${p.id}`, { method: "PATCH", body: { name: p.name }, key: job.id, signal }));
+      </script>
+
+      <h2 id="auth-refresh">Authentication and token refresh</h2>
+      <p>
+        Never put tokens in payloads: a job may run hours later. Read the token when the handler runs,
+        refresh once on 401, and stop the queue if the session is truly gone.
+      </p>
+      <script type="text/x-code" data-lang="ts" data-title="authedFetch.ts">
+async function authedFetch(url: string, init: RequestInit): Promise<Response> {
+  let res = await fetch(url, withToken(init, await auth.getAccessToken()));
+  if (res.status === 401) {
+    const fresh = await auth.refresh();                  // throws if the refresh token is dead
+    res = await fetch(url, withToken(init, fresh));
+  }
+  if (res.status === 401) throw new NonRetryableError("unauthorized");
+  return res;
+}
+      </script>
+      <script type="text/x-code" data-lang="ts">
+// If a job fails for auth reasons, pause everything until the user signs in again.
+queue.on("failed", (job, error) => {
+  if (String((error as Error)?.message).includes("unauthorized")) {
+    queue.stop();
+    showSignInScreen();
+  }
+});
+
+export function onSignedIn() {
+  for (const job of queue.getJobs({ status: "failed" })) queue.retry(job.id);
+  queue.start();
+}
+      </script>
+
+      <h2 id="rate-limit">Respecting a rate-limited API</h2>
+      <p>
+        Prevent 429s instead of reacting to them with a rate limit, and still handle them with
+        <code>Retry-After</code> when they happen.
+      </p>
+      <script type="text/x-code" data-lang="ts">
+const queue = createQueue({
+  storage,
+  network,
+  limits: {
+    geocode: { rate: { max: 10, perMs: 1000 } },                      // provider allows 10 req/s
+    sendSms: { concurrency: 1, rate: { max: 30, perMs: 60_000 } },    // 30 per minute, one at a time
+  },
+});
+      </script>
+      <p>
+        Jobs held back by a limit wait in <code>pending</code> and are woken by a timer. Other job
+        types keep flowing. The request helper above converts a real 429 into
+        <code>RetryAfterError</code>, so the delay the server chose is the delay you use.
+      </p>
+
+      <h2 id="idempotency">Idempotency, end to end</h2>
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr><th>Layer</th><th>What to do</th></tr>
+          </thead>
+          <tbody>
+            <tr><td>Client</td><td>Send <code>job.id</code> (or a business id you pass as <code>id</code>) as <code>Idempotency-Key</code>.</td></tr>
+            <tr><td>Server</td><td>Remember the key and its response for a day or more. A repeat returns the stored result instead of doing the work again.</td></tr>
+            <tr><td>Conflicts</td><td>If a repeat arrives while the first is still processing, return 409 and let the client retry later. Treat "already exists with this key" as <em>success</em> in the handler.</td></tr>
+            <tr><td>No server support</td><td>Use PUT or upserts keyed by a client-generated id so a repeat overwrites with the same data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+      <script type="text/x-code" data-lang="ts">
+if (res.status === 409 && (await res.json()).code === "duplicate_request") return;   // already done: success
+      </script>
+
+      <h2 id="graphql">A generic GraphQL mutation job</h2>
+      <script type="text/x-code" data-lang="ts" data-title="features/graphql.ts">
+type Mutation = { operationName: string; query: string; variables: Record<string, unknown> };
+
+export const runMutation = queue.define("gqlMutation", async (m: Mutation, { job, signal }) => {
+  const res = await request("/graphql", { body: m, key: job.id, signal });
+  const { errors } = await res.json();
+  if (!errors?.length) return;
+
+  const code = errors[0]?.extensions?.code;
+  if (["BAD_USER_INPUT", "FORBIDDEN", "UNAUTHENTICATED", "GRAPHQL_VALIDATION_FAILED"].includes(code)) {
+    throw new NonRetryableError(errors[0].message);          // a retry returns the same error
+  }
+  throw new Error(errors[0].message);                          // internal error: retry
+});
+
+runMutation(
+  { operationName: "AddComment", query: ADD_COMMENT, variables: { postId, text } },
+  { dedupeKey: `comment:${draftId}` },
+);
+      </script>
+      <p>GraphQL returns HTTP 200 with an <code>errors</code> array, so classify by error code, not by status.</p>
+
+      <h2 id="analytics-batching">Analytics: fire and forget, batched</h2>
+      <h3>Simple: one job per event</h3>
+      <script type="text/x-code" data-lang="ts">
+export const track = queue.define(
+  "track",
+  (e: { name: string; props?: Record<string, string>; at: number }, { signal }) =>
+    request("/events", { body: e, signal }),
+  { priority: -100, maxAttempts: 20, ttlMs: 3 * 24 * 60 * 60 * 1000 },   // low priority, drop after 3 days
+);
+
+track({ name: "screen_view", at: Date.now() });
+      </script>
+      <h3>Batched: fewer requests</h3>
+      <p>Buffer events in storage and send them together shortly after the last one.</p>
+      <script type="text/x-code" data-lang="ts" data-title="features/analytics.ts">
+const BUFFER = "analytics.buffer";
+type Event = { name: string; props?: Record<string, string>; at: number };
+const read = (): Event[] => JSON.parse(storage.getString(BUFFER) ?? "[]");
+
+const flushEvents = queue.define(
+  "flushEvents",
+  async (_: void, { signal }) => {
+    const events = read();
+    if (events.length === 0) return;
+    await request("/events/batch", { body: { events }, signal });
+    const rest = read().slice(events.length);                 // keep events added while sending
+    storage.set(BUFFER, JSON.stringify(rest));
+    if (rest.length) flushEvents(undefined, { delayMs: 10_000 });
+  },
+  { priority: -100, maxAttempts: 20 },
+);
+
+export function track(name: string, props?: Record<string, string>) {
+  storage.set(BUFFER, JSON.stringify([...read(), { name, props, at: Date.now() }]));
+  flushEvents(undefined, { dedupeKey: "flush-events", delayMs: 10_000 });   // at most one pending flush
+}
+      </script>
+      <div class="callout note">
+        <strong class="label">Why the flush job holds no events</strong>
+        <p>
+          Its payload is empty and it reads the buffer when it runs. That is why
+          <code>dedupeKey</code> is safe here: a request absorbed by an already-pending flush will be
+          picked up by it, and events that arrive during a send are handled by the follow-up flush.
+        </p>
+      </div>
+
+      <h2 id="chaining">Chaining: push, then pull</h2>
+      <p>A job can enqueue the next step. Put the id of the chain in each step so a restart cannot duplicate it.</p>
+      <script type="text/x-code" data-lang="ts">
+export const pullChanges = queue.define("pullChanges", async (_: void, { signal }) => {
+  const changes = await api.get("/changes", { since: lastSync(), signal });
+  db.apply(changes);
+  setLastSync(Date.now());
+});
+
+export const pushChanges = queue.define("pushChanges", async (_: void, { job, signal }) => {
+  await api.post("/changes", db.pendingChanges(), { key: job.id, signal });
+  db.markPushed();
+  pullChanges(undefined, { dedupeKey: "pull" });         // runs after a successful push
+});
+      </script>
+      <p>
+        Alternatively, keep the steps independent and chain from outside with
+        <code>queue.on("completed", ...)</code>. Inside the handler is simpler because it is saved
+        with the push; if the app dies between them, the push runs again and enqueues the pull.
+      </p>
+
+      <h2 id="tanstack">TanStack Query (React Query) integration</h2>
+      <p>QueueKit sends the mutation reliably; Query keeps your UI cache fresh. They complement each other.</p>
+      <script type="text/x-code" data-lang="ts">
+// 1. Optimistic update, then queue the real request.
+function addTodo(text: string) {
+  const todo = { id: uuid(), text, done: false };
+  queryClient.setQueryData<Todo[]>(["todos"], (old = []) => [...old, todo]);
+  createTodo(todo, { id: todo.id });
+}
+
+// 2. When the server has it, refresh. If the job gave up, roll the cache back.
+queue.on("completed", (job) => {
+  if (job.type === createTodo.type) queryClient.invalidateQueries({ queryKey: ["todos"] });
+});
+queue.on("failed", (job) => {
+  if (job.type === createTodo.type) queryClient.invalidateQueries({ queryKey: ["todos"] });   // refetch truth
+});
+      </script>
+
+      <h2 id="circuit-breaker">Circuit breaker</h2>
+      <p>If the backend is struggling, hammering it with retries from a million devices makes things worse. Pause the queue after a run of failures.</p>
+      <script type="text/x-code" data-lang="ts">
+let streak = 0;
+let paused = false;
+
+queue.observe(({ event }) => {
+  if (event === "completed") streak = 0;
+  if (event === "retry" || event === "failed") streak++;
+
+  if (streak >= 10 && !paused) {
+    paused = true;
+    queue.stop();                                  // jobs keep being saved
+    setTimeout(() => {
+      paused = false;
+      streak = 0;
+      queue.start();                               // try again after a minute
+    }, 60_000);
+  }
+});
+      </script>
+      <p>
+        Combined with exponential backoff and jitter, this keeps load predictable during an outage.
+        Make the pause longer on repeated trips if you like.
+      </p>
+
+      <h2 id="lanes">Priority lanes</h2>
+      <script type="text/x-code" data-lang="ts">
+export const Priority = { critical: 100, normal: 0, bulk: -100 } as const;
+
+payment(order, { priority: Priority.critical });
+sendMessage(msg);                                      // normal
+backupPhotos(batch, { priority: Priority.bulk });
+      </script>
+      <p>
+        Priority decides which eligible job starts next. If bulk work must never compete for the
+        same slots, give it its own queue with its own <code>concurrency</code>
+        (<a href="storage.html#multiple-queues">Multiple queues</a>).
+      </p>
+
+      <h2 id="health-check">Detect "connected but no internet"</h2>
+      <p>
+        Captive portals and dead Wi-Fi look online to the operating system. Add a reachability
+        monitor that probes your API:
+        <a href="storage.html#network-monitors">Network monitors</a>.
+      </p>
+    </article>
+  </body>
+</html>
