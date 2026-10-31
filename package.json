@@ -1,0 +1,86 @@
+{
+  "name": "@nijatk/react-native-queuekit",
+  "version": "0.1.0",
+  "description": "Reliable offline job queue for React Native, backed by MMKV: retries, backoff, network awareness and crash recovery.",
+  "license": "MIT",
+  "author": "Nijat Kazimli (https://github.com/nijatkazimli)",
+  "homepage": "https://nijatkazimli.github.io/react-native-queuekit/",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nijatkazimli/react-native-queuekit.git"
+  },
+  "bugs": {
+    "url": "https://github.com/nijatkazimli/react-native-queuekit/issues"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./react": {
+      "types": "./dist/react/index.d.ts",
+      "default": "./dist/react/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepare": "git config --local core.hooksPath .githooks || true",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
+    "test:fuzz": "FC_RUNS=5000 vitest run test/queue/property.test.ts",
+    "lint": "biome check",
+    "format": "biome check --write",
+    "docs": "node scripts/serve-docs.mjs",
+    "prepublishOnly": "npm run build",
+    "release": "npm run release:patch",
+    "release:patch": "npm version patch && git push --follow-tags",
+    "release:minor": "npm version minor && git push --follow-tags",
+    "release:major": "npm version major && git push --follow-tags"
+  },
+  "peerDependencies": {
+    "react": ">=18"
+  },
+  "peerDependenciesMeta": {
+    "react": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.6.4",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
+    "@vitest/coverage-v8": "^5.0.5",
+    "fast-check": "^4.10.2",
+    "happy-dom": "^21.0.4",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "typescript": "~6.0.3",
+    "vitest": "^5.0.5"
+  },
+  "keywords": [
+    "react-native",
+    "offline",
+    "offline-first",
+    "queue",
+    "job-queue",
+    "retry",
+    "backoff",
+    "mmkv",
+    "background-jobs",
+    "sync"
+  ]
+}
