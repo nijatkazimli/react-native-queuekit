@@ -288,7 +288,7 @@ Git hooks in `.githooks` run lint, typecheck and tests before commit, and add co
 
 ### Releasing
 
-`npm run release:patch` (or `release:minor` / `release:major`) bumps the version, tags it and pushes the tag. The workflow in `.github/workflows/publish.yml` then runs lint, typecheck and tests with coverage, builds, publishes to npm with provenance and creates the GitHub release. A version that is already on npm is skipped, so the very first release can be published by hand (`npm publish --access public`) before its tag is pushed; then add the repository as a trusted publisher in the package's npm settings.
+`npm run release:patch` (or `release:minor` / `release:major`) bumps the version, tags it and pushes the tag. The workflow in `.github/workflows/publish.yml` then runs lint, typecheck and tests with coverage, builds, publishes to npm with provenance and creates the GitHub release, with notes generated from the commit subjects (`scripts/release-notes.mjs`). A version that is already on npm is skipped, so the very first release can be published by hand (`npm publish --access public`) before its tag is pushed; then add the repository as a trusted publisher in the package's npm settings.
 
 ### Documentation site
 
