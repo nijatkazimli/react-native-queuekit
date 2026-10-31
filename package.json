@@ -1,6 +1,6 @@
 {
   "name": "@nijatk/react-native-queuekit",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Reliable offline job queue for React Native, backed by MMKV: retries, backoff, network awareness and crash recovery.",
   "license": "MIT",
   "author": "Nijat Kazimli (https://github.com/nijatkazimli)",
