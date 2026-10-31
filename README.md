@@ -226,6 +226,7 @@ Complete, copy-pasteable app code in [examples/](examples):
 - [observers.ts](examples/observers.ts): Firebase and Azure Application Insights via `queue.observe`
 - [features/background-upload.ts](examples/features/background-upload.ts): native background upload with `ctx.detach()`
 - [background.ts](examples/background.ts): periodic background task and foreground flush
+- [app/](examples/app): QueueKit Lab, an Expo app to try every feature on a device or in the browser
 
 ## API
 
@@ -269,7 +270,7 @@ src/
   platform/                      storage, network and app-state adapters
   react/                         hooks and provider (@nijatk/react-native-queuekit/react)
 test/                            mirrors src/; test/queue/ holds the queue behavior and property tests
-examples/                        copy-pasteable app code, not built or typechecked
+examples/                        copy-pasteable app code; examples/app is a runnable Expo test app
 docs/                            documentation site (plain HTML, published to GitHub Pages)
 scripts/                         dev tooling (docs server)
 .githooks/  .github/workflows/   git hooks and CI
