@@ -28,10 +28,13 @@ jobs:
       - run: npm run build
       - name: Publish to npm
         run: |
-          if npm view "$(node -p 'require("./package.json").name')@$(node -p 'require("./package.json").version')" version >/dev/null 2>&1; then
+          status=0
+          npm publish --access public --provenance > /tmp/publish.log 2>&1 || status=$?
+          cat /tmp/publish.log
+          if [ "$status" -ne 0 ]; then
+            # npm view can lag behind a fresh publish, so detect "already published" from the error.
+            grep -q "cannot publish over the previously published" /tmp/publish.log || exit "$status"
             echo "Already on npm, skipping publish"
-          else
-            npm publish --access public --provenance
           fi
       - name: Create GitHub Release
         env:
