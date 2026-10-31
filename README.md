@@ -1,5 +1,7 @@
 # QueueKit
 
+[Documentation](https://nijatkazimli.github.io/react-native-queuekit/) · [npm](https://www.npmjs.com/package/@nijatk/react-native-queuekit) · [Changelog](https://github.com/nijatkazimli/react-native-queuekit/releases)
+
 Reliable offline job queue for React Native. Uploads, form submissions and background work survive app kills, flaky networks and crashes, and retry automatically with backoff.
 
 - **Persistent**: every job is written to [MMKV](https://github.com/margelo/react-native-mmkv) synchronously, before `enqueue()` returns.
@@ -9,7 +11,7 @@ Reliable offline job queue for React Native. Uploads, form submissions and backg
 - **Modular**: core has zero dependencies; React hooks live in `@nijatk/react-native-queuekit/react`; storage and network are plain interfaces.
 - **Typed**: `queue.define()` infers the payload type from your handler, so a wrong payload is a compile error.
 
-Full documentation with guides, a cookbook and the API reference lives in [docs/](docs/index.html) and is published with GitHub Pages.
+Full documentation with guides, a cookbook and the API reference lives at [nijatkazimli.github.io/react-native-queuekit](https://nijatkazimli.github.io/react-native-queuekit/) (source in [docs/](docs/index.html)).
 
 ## Install
 
