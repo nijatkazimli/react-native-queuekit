@@ -40,7 +40,7 @@ The flows find elements by `testID` (tabs, stats, badges, buttons) and by text. 
 - The Events tab shows `Totals:` and `Start order:` lines, which the flows read instead of scanning the log. They are also handy by hand.
 - The `secret-looking key` warning is development only, so its flow just checks the job is enqueued. Background tasks are not covered, because iOS simulators do not support them.
 
-GitHub Actions runs the same flows on a macOS runner (`.github/workflows/e2e.yml`) on pushes to `main` that touch the library or the app, weekly, and on demand.
+The same flows can be run on a macOS runner from the Actions tab (`.github/workflows/e2e.yml`, manual only). They are not part of the automatic checks, because the shared runners are slow enough to make some timing-based flows unreliable.
 
 ## Notes
 
