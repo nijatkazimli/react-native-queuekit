@@ -51,7 +51,9 @@ function JobCard({ job, onDetails }: Readonly<{ job: Job; onDetails: () => void 
   return (
     <Card>
       <Row>
-        <Text style={{ color: "#E8ECFF", fontWeight: "700", flex: 1 }}>{job.type}</Text>
+        <Text testID={`job-${job.type}`} style={{ color: "#E8ECFF", fontWeight: "700", flex: 1 }}>
+          {job.type}
+        </Text>
         <Badge label={job.status} color={statusColor[job.status]} />
       </Row>
       <Text style={{ color: "#8C97C4", fontSize: 11 }}>

@@ -30,6 +30,25 @@ const eventColor: Record<QueueEvent, string> = {
 const time = (at: number) => new Date(at).toTimeString().slice(0, 8);
 const show = (value: unknown) => (value === undefined ? "" : JSON.stringify(value));
 
+// Which jobs started, oldest first. Makes ordering tests easy to read at a glance.
+function counts(entries: LogEntry[]): string {
+  const seen = new Map<QueueEvent, number>();
+  for (const { event } of entries) seen.set(event, (seen.get(event) ?? 0) + 1);
+  return EVENTS.filter((event) => seen.has(event))
+    .map((event) => `${event} ${seen.get(event)}`)
+    .join(", ");
+}
+function startOrder(entries: LogEntry[]): string {
+  return entries
+    .filter((entry) => entry.event === "started")
+    .reverse()
+    .map(({ payload, type }) => {
+      const p = (payload ?? {}) as { label?: string; n?: number };
+      return p.label ?? (p.n === undefined ? type : `step ${p.n}`);
+    })
+    .join(", ");
+}
+
 function Entry({ entry }: Readonly<{ entry: LogEntry }>) {
   const detail = [
     `attempts used: ${entry.attempt}`,
@@ -66,6 +85,7 @@ export function EventsScreen() {
       return next;
     });
   const shown = entries.filter((entry) => !hidden.has(entry.event));
+  const order = startOrder(entries);
   return (
     <Screen>
       <Heading>Events</Heading>
@@ -73,6 +93,18 @@ export function EventsScreen() {
         Everything queue.observe() reports, newest first: durations, results and errors. Instance
         letters show which queue emitted it (see the Dashboard lease lab).
       </Body>
+      {entries.length > 0 ? (
+        <Card>
+          <Text testID="event-counts" style={{ color: colors.text, fontSize: 13 }}>
+            Totals: {counts(entries)}
+          </Text>
+          {order ? (
+            <Text testID="start-order" style={{ color: colors.text, fontSize: 13 }}>
+              Start order: {order}
+            </Text>
+          ) : null}
+        </Card>
+      ) : null}
       <Row wrap>
         {EVENTS.map((event) => (
           <Chip

@@ -18,6 +18,7 @@ export function Screen({ children }: Readonly<{ children: ReactNode }>) {
       style={{ flex: 1 }}
       contentContainerStyle={{ padding: 16, paddingBottom: 48, gap: 14 }}
       keyboardShouldPersistTaps="handled"
+      keyboardDismissMode="on-drag"
     >
       {children}
     </ScrollView>
@@ -65,14 +66,24 @@ type BtnProps = Readonly<{
   small?: boolean;
   disabled?: boolean;
   style?: ViewStyle;
+  testID?: string;
 }>;
 
-export function Btn({ label, onPress, kind = "primary", small, disabled, style }: BtnProps) {
+export function Btn({
+  label,
+  onPress,
+  kind = "primary",
+  small,
+  disabled,
+  style,
+  testID,
+}: BtnProps) {
   const bg = { primary: colors.accent, ghost: "transparent", danger: colors.bad, ok: colors.ok }[
     kind
   ];
   return (
     <Pressable
+      testID={testID}
       onPress={onPress}
       disabled={disabled}
       style={({ pressed }) => [
@@ -103,6 +114,7 @@ export function Chip({
 }: Readonly<{ label: string; active?: boolean; onPress: () => void }>) {
   return (
     <Pressable
+      testID={`chip-${label}`}
       onPress={onPress}
       style={[s.chip, active && { backgroundColor: colors.accent, borderColor: colors.accent }]}
     >
@@ -114,7 +126,9 @@ export function Chip({
 export function Badge({ label, color }: Readonly<{ label: string; color: string }>) {
   return (
     <View style={[s.badge, { borderColor: color }]}>
-      <Text style={[s.badgeText, { color }]}>{label}</Text>
+      <Text testID={`badge-${label}`} style={[s.badgeText, { color }]}>
+        {label}
+      </Text>
     </View>
   );
 }
@@ -126,7 +140,9 @@ export function Stat({
 }: Readonly<{ label: string; value: string | number; color?: string }>) {
   return (
     <View style={s.stat}>
-      <Text style={[s.statValue, color ? { color } : null]}>{value}</Text>
+      <Text testID={`stat-${label}`} style={[s.statValue, color ? { color } : null]}>
+        {value}
+      </Text>
       <Text style={s.statLabel}>{label}</Text>
     </View>
   );
@@ -181,6 +197,7 @@ export function NumberField({
       <Text style={s.fieldLabel}>{label}</Text>
       <View style={s.inputWrap}>
         <TextInput
+          testID={`field-${label}`}
           value={text}
           onChangeText={(next) => {
             setText(next);
@@ -213,6 +230,7 @@ export function TextField({
     <View style={{ gap: 4 }}>
       <Text style={s.fieldLabel}>{label}</Text>
       <TextInput
+        testID={`field-${label}`}
         value={value}
         onChangeText={onChange}
         placeholder={placeholder}

@@ -150,10 +150,11 @@ export function DashboardScreen() {
         hint="start, stop, flush, drain, clear, and a restart that reloads everything from storage."
       >
         <Row wrap>
-          <Btn label="Start" small onPress={() => queue.start()} />
-          <Btn label="Stop" small kind="ghost" onPress={() => queue.stop()} />
-          <Btn label="Flush" small kind="ghost" onPress={() => queue.flush()} />
+          <Btn testID="ctl-start" label="Start" small onPress={() => queue.start()} />
+          <Btn testID="ctl-stop" label="Stop" small kind="ghost" onPress={() => queue.stop()} />
+          <Btn testID="ctl-flush" label="Flush" small kind="ghost" onPress={() => queue.flush()} />
           <Btn
+            testID="ctl-drain"
             label="Drain (5 s)"
             small
             kind="ghost"
@@ -165,9 +166,10 @@ export function DashboardScreen() {
               );
             }}
           />
-          <Btn label="Clear" small kind="danger" onPress={() => queue.clear()} />
+          <Btn testID="ctl-clear" label="Clear" small kind="danger" onPress={() => queue.clear()} />
         </Row>
         <Btn
+          testID="ctl-restart"
           label="Restart queue (simulates an app restart)"
           small
           kind="ghost"

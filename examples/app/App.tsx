@@ -68,6 +68,7 @@ function TabBar({
       {TABS.map((tab) => (
         <Pressable
           key={tab.id}
+          testID={`tab-${tab.id}`}
           onPress={() => onSelect(tab.id)}
           style={{ flex: 1, alignItems: "center", paddingVertical: 12 }}
         >

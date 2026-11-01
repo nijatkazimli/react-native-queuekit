@@ -27,6 +27,12 @@ interface Test {
 const withSettings = (patch: Partial<Settings>) => (rt: Runtime) =>
   rebuildRuntime({ ...rt.settings, ...patch });
 
+const slug = (title: string) =>
+  title
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+
 const SECTIONS: { title: string; tests: Test[] }[] = [
   {
     title: "Basics",
@@ -48,8 +54,8 @@ const SECTIONS: { title: string; tests: Test[] }[] = [
         proves: "Jobs with a higher priority start first.",
         steps: ["Press Add 3 jobs.", "Open Events."],
         expect: [
-          "Events lists the newest first, so read upward: started high, then mid, then low.",
-          "The payload label shows which job it is.",
+          "Events shows Start order: high, mid, low.",
+          "Newest events are listed first, so the log reads upward.",
         ],
         actions: [
           {
@@ -114,11 +120,11 @@ const SECTIONS: { title: string; tests: Test[] }[] = [
       {
         title: "Timeout",
         proves: "A job that never ends is stopped by its timeoutMs.",
-        steps: ["Press Hang (2 s timeout).", "Open Events and watch for 5 seconds."],
+        steps: ["Press Hang for 2 s.", "Open Events and watch for 5 seconds."],
         expect: ["After 2 seconds: retry with the error Job timed out after 2000ms, then failed."],
         actions: [
           {
-            label: "Hang (2 s timeout)",
+            label: "Hang for 2 s",
             run: ({ jobs }) => jobs.hang({}, { timeoutMs: 2000, maxAttempts: 2 }),
           },
         ],
@@ -196,8 +202,8 @@ const SECTIONS: { title: string; tests: Test[] }[] = [
           "Press Without and compare.",
         ],
         expect: [
-          "With: step 1 fails twice first. Steps 2 and 3 start only after step 1 completes.",
-          "Without: steps 2 and 3 finish while step 1 is still retrying.",
+          "With: Events shows Start order: step 1, step 1, step 1, step 2, step 3. Step 1 starts three times because it retries, and steps 2 and 3 wait for it.",
+          "Without: Start order is step 1, step 2, step 3, step 1, step 1. Steps 2 and 3 finish while step 1 is still retrying.",
         ],
         actions: [
           {
@@ -520,7 +526,7 @@ function TestCard({
 }>) {
   return (
     <Card>
-      <Pressable onPress={onToggle} style={{ gap: 2 }}>
+      <Pressable testID={`test-${slug(test.title)}`} onPress={onToggle} style={{ gap: 2 }}>
         <Row>
           <Text style={{ color: colors.text, fontSize: 15, fontWeight: "700", flex: 1 }}>
             {test.title}
@@ -645,7 +651,7 @@ function CustomJob({ runtime }: Readonly<{ runtime: Runtime }>) {
       <TextField label="id" value={id} onChange={setId} placeholder="generated if empty" />
       <Toggle label="requiresNetwork" value={requiresNetwork} onChange={setRequiresNetwork} />
       <Toggle label="sensitive" value={sensitive} onChange={setSensitive} />
-      <Btn label={`queue.enqueue("${type}", ...)`} onPress={enqueue} />
+      <Btn testID="custom-enqueue" label={`queue.enqueue("${type}", ...)`} onPress={enqueue} />
     </View>
   );
 }
