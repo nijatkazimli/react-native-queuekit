@@ -24,6 +24,8 @@ npm install @nijatk/react-native-queuekit react-native-mmkv react-native-nitro-m
 npm install @react-native-community/netinfo   # optional, for connectivity
 ```
 
+Tested with the [example app](examples/app) on an iPhone 16 Pro, the iOS simulator (31 end-to-end flows) and a Samsung Galaxy M34 (Android 14).
+
 ## Usage
 
 Create the queue once. It only needs storage and (optionally) a network monitor.
