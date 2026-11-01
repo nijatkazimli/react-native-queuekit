@@ -1,6 +1,7 @@
 # QueueKit
 
 [![CI](https://github.com/nijatkazimli/react-native-queuekit/actions/workflows/ci.yml/badge.svg)](https://github.com/nijatkazimli/react-native-queuekit/actions/workflows/ci.yml)
+[![E2E (iOS)](https://github.com/nijatkazimli/react-native-queuekit/actions/workflows/e2e.yml/badge.svg)](https://github.com/nijatkazimli/react-native-queuekit/actions/workflows/e2e.yml)
 [![npm version](https://img.shields.io/npm/v/@nijatk/react-native-queuekit)](https://www.npmjs.com/package/@nijatk/react-native-queuekit)
 [![license](https://img.shields.io/npm/l/@nijatk/react-native-queuekit)](LICENSE)
 
