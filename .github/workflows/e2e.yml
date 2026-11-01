@@ -1,0 +1,73 @@
+name: E2E (iOS)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "examples/app/**"
+      - ".github/workflows/e2e.yml"
+  schedule:
+    - cron: "41 4 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ios:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      MAESTRO_VERSION: "2.12.0"
+      MAESTRO_CLI_NO_ANALYTICS: "1"
+      MAESTRO_CLI_ANALYSIS_NOTIFICATION_DISABLED: "true"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            examples/app/package-lock.json
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: 21
+      - run: npm ci
+      - name: Install app dependencies
+        working-directory: examples/app
+        run: npm ci
+      - name: Boot an iPhone simulator
+        run: |
+          UDID=$(xcrun simctl list devices available -j | jq -r '[.devices[][] | select(.name | startswith("iPhone"))][-1].udid')
+          echo "UDID=$UDID" >> "$GITHUB_ENV"
+          xcrun simctl boot "$UDID"
+      - name: Build and install the Release app
+        working-directory: examples/app
+        run: |
+          npm run build:lib
+          npx expo run:ios --configuration Release --no-bundler --device "$UDID"
+      - name: Install Maestro
+        run: |
+          curl -fsSL "https://get.maestro.mobile.dev" | bash
+          echo "$HOME/.maestro/bin" >> "$GITHUB_PATH"
+      - name: Run the e2e flows
+        working-directory: examples/app
+        run: |
+          maestro test --device "$UDID" \
+            --format junit --output "$RUNNER_TEMP/maestro-report.xml" \
+            --debug-output "$RUNNER_TEMP/maestro-debug" .maestro
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: maestro-ios
+          path: |
+            ${{ runner.temp }}/maestro-report.xml
+            ${{ runner.temp }}/maestro-debug
+          if-no-files-found: ignore
