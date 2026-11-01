@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/nijatkazimli/react-native-queuekit/security/advisories/new
+    about: Please report security problems privately, not as a public issue.
+  - name: Documentation
+    url: https://nijatkazimli.github.io/react-native-queuekit/
+    about: Guides, recipes and the API reference. The FAQ covers common problems.

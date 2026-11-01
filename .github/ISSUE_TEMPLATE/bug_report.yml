@@ -1,0 +1,47 @@
+name: Bug report
+description: Something does not work as documented
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for the report. A small reproduction is the fastest way to a fix. The Lab app in `examples/app` is a good place to reproduce.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What did you do, what did you expect, and what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: How to reproduce
+      description: Steps or a short snippet (the `createQueue()` config and the handler help most).
+      render: ts
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: QueueKit version
+      placeholder: "1.0.1"
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: iOS or Android, real device or simulator, and the OS version.
+    validations:
+      required: true
+  - type: input
+    id: rn
+    attributes:
+      label: React Native, Expo and MMKV versions
+      placeholder: "RN 0.88, Expo 58, react-native-mmkv 4.3"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or events
+      description: Errors, or the output of `queue.observe()` around the problem. Remove anything private.
+      render: shell
