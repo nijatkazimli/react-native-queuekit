@@ -1,5 +1,9 @@
 # QueueKit
 
+[![CI](https://github.com/nijatkazimli/react-native-queuekit/actions/workflows/ci.yml/badge.svg)](https://github.com/nijatkazimli/react-native-queuekit/actions/workflows/ci.yml)
+[![npm version](https://img.shields.io/npm/v/@nijatk/react-native-queuekit)](https://www.npmjs.com/package/@nijatk/react-native-queuekit)
+[![license](https://img.shields.io/npm/l/@nijatk/react-native-queuekit)](LICENSE)
+
 [Documentation](https://nijatkazimli.github.io/react-native-queuekit/) · [npm](https://www.npmjs.com/package/@nijatk/react-native-queuekit) · [Changelog](https://github.com/nijatkazimli/react-native-queuekit/releases)
 
 Reliable offline job queue for React Native. Uploads, form submissions and background work survive app kills, flaky networks and crashes, and retry automatically with backoff.
@@ -262,6 +266,8 @@ Retry defaults: 5 attempts, 1s base delay doubling up to 60s, with jitter. Overr
 Queue state is small, key-addressed and hot: each job is one key, read and written individually. MMKV is a memory-mapped file with synchronous access, so enqueue is crash-safe the moment it returns and there is no async startup or schema. A SQL database earns its keep for querying large relational data, which a job queue doesn't need. If you need to ship large binary payloads, store the file on disk and queue its path.
 
 ## Development
+
+Contributions are welcome: see [CONTRIBUTING.md](CONTRIBUTING.md). Report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 
 ```text
 src/
