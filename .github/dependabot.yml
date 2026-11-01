@@ -1,0 +1,45 @@
+version: 2
+
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "ci"
+
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      dev-dependencies:
+        dependency-type: development
+        update-types: [minor, patch]
+    ignore:
+      # Capped to what the lint and test toolchain supports.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
+
+  # `expo install` pins versions that match the Expo SDK, so those packages are upgraded with the SDK, not one by one.
+  - package-ecosystem: npm
+    directory: /examples/app
+    schedule:
+      interval: monthly
+    commit-message:
+      prefix: "chore(example)"
+    groups:
+      example-dependencies:
+        patterns: ["*"]
+        update-types: [minor, patch]
+    ignore:
+      - dependency-name: "expo*"
+      - dependency-name: "react"
+      - dependency-name: "react-dom"
+      - dependency-name: "react-native*"
+      - dependency-name: "@types/react"
+      - dependency-name: "@react-native-community/*"
+      - dependency-name: "@expo/*"
+      - dependency-name: "typescript"
