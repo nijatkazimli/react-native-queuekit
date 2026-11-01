@@ -1,0 +1,50 @@
+appId: com.nijatk.queuekitlab
+name: Settings, storage inspector and parseRetryAfter
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: fatal-error-no-retry
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Fatal error
+- tapOn:
+    id: tab-settings
+- tapOn:
+    id: field-concurrency
+- eraseText: 5
+- inputText: "1"
+- scrollUntilVisible:
+    element:
+      text: ".*after failure 1: 1000 ms.*"
+    centerElement: true
+- scrollUntilVisible:
+    element:
+      text: Apply and restart queue
+    centerElement: true
+- tapOn: Apply and restart queue
+- assertVisible: Queue restarted
+- scrollUntilVisible:
+    element:
+      text: List keys
+    centerElement: true
+- tapOn: List keys
+- scrollUntilVisible:
+    element:
+      text: ".*queuekit:lab:job:.*"
+    centerElement: true
+- scrollUntilVisible:
+    element:
+      id: field-Header value
+    centerElement: true
+- assertVisible: ".*120000 ms.*"
+- tapOn:
+    id: field-Header value
+- eraseText: 10
+- inputText: "5"
+- scrollUntilVisible:
+    element:
+      text: ".*5000 ms.*"
+    centerElement: true

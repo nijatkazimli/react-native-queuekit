@@ -1,0 +1,50 @@
+appId: com.nijatk.queuekitlab
+name: Offline jobs wait or run depending on requiresNetwork
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: offline-wait-or-run
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 1 Go offline
+- tapOn:
+    id: tab-dashboard
+- assertVisible:
+    id: badge-offline
+- tapOn:
+    id: tab-lab
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 2 Needs network
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 3 Works offline
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 15000
+- tapOn:
+    id: tab-queue
+- assertVisible:
+    id: badge-pending
+- tapOn:
+    id: tab-lab
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 4 Go online
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 2.*"
+    timeout: 20000
+- tapOn:
+    id: tab-dashboard
+- assertVisible:
+    id: badge-online

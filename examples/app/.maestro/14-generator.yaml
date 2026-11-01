@@ -1,0 +1,33 @@
+appId: com.nijatk.queuekitlab
+name: Generator job reports progress and can be cancelled
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: generator-job
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 8 chunks
+- tapOn:
+    id: tab-queue
+- assertVisible:
+    id: job-demo.resumable
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 25000
+- tapOn:
+    id: tab-lab
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 8 chunks
+- tapOn:
+    id: tab-queue
+- tapOn: Remove
+- tapOn:
+    id: tab-events
+- assertVisible: ".*removed 1.*"

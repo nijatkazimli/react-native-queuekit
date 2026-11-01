@@ -1,0 +1,24 @@
+appId: com.nijatk.queuekitlab
+name: Events log filters and Clear log
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: a-job-runs-to-the-end
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Run job
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 15000
+- tapOn:
+    id: chip-completed
+- assertNotVisible:
+    id: badge-completed
+- tapOn: Clear log
+- assertNotVisible:
+    id: event-counts

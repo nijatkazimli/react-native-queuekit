@@ -1,0 +1,49 @@
+appId: com.nijatk.queuekitlab
+name: Dashboard controls (stop, start, drain, clear, restart)
+---
+- runFlow: subflows/fresh.yaml
+- tapOn:
+    id: ctl-stop
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: a-job-runs-to-the-end
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Run job
+- tapOn:
+    id: tab-dashboard
+- assertVisible:
+    id: stat-pending
+    text: "1"
+- tapOn:
+    id: ctl-start
+- extendedWaitUntil:
+    visible:
+      id: stat-total
+      text: "0"
+    timeout: 20000
+- tapOn:
+    id: ctl-drain
+- assertVisible: ".*queue is idle.*"
+- tapOn:
+    id: tab-lab
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: delay
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Run in 5 s
+- tapOn:
+    id: tab-dashboard
+- tapOn:
+    id: ctl-clear
+- assertVisible:
+    id: stat-total
+    text: "0"
+- tapOn:
+    id: ctl-restart
+- assertVisible: ".*Queue generation 2.*"

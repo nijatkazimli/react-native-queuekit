@@ -1,0 +1,29 @@
+appId: com.nijatk.queuekitlab
+name: Queue filters and Clear all
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: fatal-error-no-retry
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Fatal error
+- tapOn:
+    id: tab-queue
+- extendedWaitUntil:
+    visible:
+      id: badge-failed
+    timeout: 15000
+- tapOn:
+    id: chip-pending
+- assertNotVisible:
+    id: job-demo.fatal
+- tapOn:
+    id: chip-failed
+- assertVisible:
+    id: job-demo.fatal
+- tapOn: Clear all
+- assertNotVisible:
+    id: job-demo.fatal

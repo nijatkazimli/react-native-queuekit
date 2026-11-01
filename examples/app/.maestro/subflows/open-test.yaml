@@ -1,0 +1,12 @@
+appId: com.nijatk.queuekitlab
+---
+# Opens one Lab test card. Pass the card's slug as TEST (the title in lowercase with dashes).
+- tapOn:
+    id: tab-lab
+- scrollUntilVisible:
+    element:
+      id: test-${TEST}
+    timeout: 40000
+    centerElement: true
+- tapOn:
+    id: test-${TEST}

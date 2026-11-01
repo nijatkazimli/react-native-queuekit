@@ -1,0 +1,25 @@
+appId: com.nijatk.queuekitlab
+name: Remove a running job
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: cancel-a-running-job
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Start long job
+- tapOn:
+    id: tab-queue
+- extendedWaitUntil:
+    visible:
+      id: badge-active
+    timeout: 10000
+- tapOn: Remove
+- assertNotVisible:
+    id: job-demo.hang
+- tapOn:
+    id: tab-events
+- assertVisible: ".*removed 1.*"
+- assertVisible: ".*started 1.*"

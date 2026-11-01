@@ -30,7 +30,9 @@
     "ios": "npm run build:lib && expo run:ios",
     "android": "npm run build:lib && expo run:android",
     "web": "npm run build:lib && expo start --web",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "ios:release": "npm run build:lib && expo run:ios --configuration Release --no-bundler",
+    "e2e": "maestro test .maestro"
   },
   "private": true,
   "description": "Expo test app for @nijatk/react-native-queuekit"

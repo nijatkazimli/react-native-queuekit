@@ -1,0 +1,19 @@
+appId: com.nijatk.queuekitlab
+name: Retry with backoff
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: retry-with-backoff
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Fail twice
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 25000
+- assertVisible: ".*retry 2.*"
+- assertVisible: ".*started 3.*"

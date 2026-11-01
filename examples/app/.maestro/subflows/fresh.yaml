@@ -1,0 +1,8 @@
+appId: com.nijatk.queuekitlab
+---
+- launchApp:
+    clearState: true
+- extendedWaitUntil:
+    visible:
+      id: tab-dashboard
+    timeout: 30000

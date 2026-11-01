@@ -1,0 +1,24 @@
+appId: com.nijatk.queuekitlab
+name: Custom enqueue builder
+---
+- runFlow: subflows/fresh.yaml
+- tapOn:
+    id: tab-lab
+- scrollUntilVisible:
+    element:
+      text: Show
+    direction: DOWN
+    timeout: 60000
+    centerElement: true
+- tapOn: Show
+- scrollUntilVisible:
+    element:
+      id: custom-enqueue
+    centerElement: true
+- tapOn:
+    id: custom-enqueue
+- assertVisible: Enqueued
+- tapOn:
+    id: tab-queue
+- assertVisible:
+    id: job-demo.success

@@ -1,0 +1,26 @@
+appId: com.nijatk.queuekitlab
+name: retention removes old failed jobs
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: clean-up-failed-jobs
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 1 Keep 2 failed
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 2 Add 5 failures
+- tapOn:
+    id: tab-dashboard
+- extendedWaitUntil:
+    visible:
+      id: stat-failed
+      text: "2"
+    timeout: 15000
+- tapOn:
+    id: tab-events
+- assertVisible: ".*removed 3.*"

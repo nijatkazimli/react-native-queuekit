@@ -1,0 +1,7 @@
+appId: com.nijatk.queuekitlab
+---
+# Maestro has no sleep command: wait for something that never appears, and carry on after MS.
+- extendedWaitUntil:
+    visible: "this text never appears"
+    timeout: ${MS}
+    optional: true

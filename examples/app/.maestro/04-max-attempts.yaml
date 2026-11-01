@@ -1,0 +1,26 @@
+appId: com.nijatk.queuekitlab
+name: Gives up after max attempts, then Retry
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: gives-up-after-max-attempts
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Always fail
+- tapOn:
+    id: tab-queue
+- extendedWaitUntil:
+    visible:
+      id: badge-failed
+    timeout: 15000
+- assertVisible: ".*HTTP 500.*"
+- tapOn: Retry
+- assertVisible: Retrying
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*failed 2.*"
+    timeout: 20000

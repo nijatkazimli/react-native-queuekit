@@ -1,0 +1,34 @@
+appId: com.nijatk.queuekitlab
+name: A job survives the app being killed
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: crash-recovery
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 1 Start long job
+- tapOn:
+    id: tab-queue
+- extendedWaitUntil:
+    visible:
+      id: badge-active
+    timeout: 10000
+- stopApp
+- launchApp
+- extendedWaitUntil:
+    visible:
+      id: tab-queue
+    timeout: 30000
+- tapOn:
+    id: tab-queue
+- extendedWaitUntil:
+    visible:
+      id: job-demo.hang
+    timeout: 15000
+- extendedWaitUntil:
+    visible:
+      id: badge-active
+    timeout: 15000

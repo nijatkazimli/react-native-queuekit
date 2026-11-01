@@ -1,0 +1,18 @@
+appId: com.nijatk.queuekitlab
+name: dedupeKey creates one job
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: dedupe
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Enqueue 3 times
+- assertVisible: "3 calls created 1 job"
+- tapOn:
+    id: tab-dashboard
+- assertVisible:
+    id: stat-total
+    text: "1"

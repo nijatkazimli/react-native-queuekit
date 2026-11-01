@@ -1,0 +1,9 @@
+appId: com.nijatk.queuekitlab
+---
+# Presses a button of the open Lab test card. Pass its label as LABEL.
+- scrollUntilVisible:
+    element:
+      text: ${LABEL}
+    timeout: 40000
+    centerElement: true
+- tapOn: ${LABEL}

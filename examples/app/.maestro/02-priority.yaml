@@ -1,0 +1,18 @@
+appId: com.nijatk.queuekitlab
+name: Higher priority starts first
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: priority
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Add 3 jobs
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 3.*"
+    timeout: 20000
+- assertVisible: "Start order: high, mid, low"

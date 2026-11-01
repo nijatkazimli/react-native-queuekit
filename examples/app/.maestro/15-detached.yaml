@@ -1,0 +1,23 @@
+appId: com.nijatk.queuekitlab
+name: A detached job waits for complete()
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: hand-off-to-a-native-task
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Hand off
+- tapOn:
+    id: tab-queue
+- extendedWaitUntil:
+    visible: ".*external: native-.*"
+    timeout: 10000
+- tapOn: Complete
+- assertNotVisible:
+    id: job-demo.native
+- tapOn:
+    id: tab-events
+- assertVisible: ".*completed 1.*"

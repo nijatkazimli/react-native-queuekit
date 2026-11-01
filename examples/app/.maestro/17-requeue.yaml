@@ -1,0 +1,35 @@
+appId: com.nijatk.queuekitlab
+name: A connection drop mid-request does not use an attempt
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: connection-drops-mid-request
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 1 Start request
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 2 Go offline
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*requeued 1.*"
+    timeout: 20000
+- assertNotVisible:
+    id: badge-retry
+- tapOn:
+    id: tab-lab
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 3 Go online
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 25000
+- assertVisible: ".*started 2.*"

@@ -1,0 +1,22 @@
+appId: com.nijatk.queuekitlab
+name: Defining a job type twice is an error while strict is on
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: defining-a-job-twice-strict
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 1 Define again
+- assertVisible: ".*already defined with a different handler.*"
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 2 Strict off
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 1 Define again
+- assertVisible: ".*Replaced silently.*"

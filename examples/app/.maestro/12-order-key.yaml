@@ -1,0 +1,17 @@
+appId: com.nijatk.queuekitlab
+name: orderKey keeps jobs in order
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: keep-order-orderkey
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: With orderKey
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: "Start order: step 1, step 1, step 1, step 2, step 3"
+    timeout: 30000

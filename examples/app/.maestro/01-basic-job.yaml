@@ -1,0 +1,22 @@
+appId: com.nijatk.queuekitlab
+name: A job runs to the end
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: a-job-runs-to-the-end
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Run job
+- tapOn:
+    id: tab-queue
+- assertVisible:
+    id: job-demo.success
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 15000
+- assertVisible: ".*finishedAfterAttempt.*"

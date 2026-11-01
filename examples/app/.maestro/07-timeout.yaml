@@ -1,0 +1,19 @@
+appId: com.nijatk.queuekitlab
+name: A hanging job is stopped by its timeout
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: timeout
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Hang for 2 s
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*failed 1.*"
+    timeout: 25000
+- assertVisible: ".*retry 1.*"
+- assertVisible: ".*Job timed out after 2000ms.*"

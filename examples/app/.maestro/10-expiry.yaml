@@ -1,0 +1,19 @@
+appId: com.nijatk.queuekitlab
+name: ttlMs drops a job before it runs
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: expiry
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Expire first
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*expired 1.*"
+    timeout: 20000
+- assertNotVisible:
+    id: badge-started

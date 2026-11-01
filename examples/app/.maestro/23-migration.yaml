@@ -1,0 +1,20 @@
+appId: com.nijatk.queuekitlab
+name: Old payloads are migrated when the queue loads
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: payload-migration
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Write old job and restart
+- tapOn:
+    id: tab-queue
+- extendedWaitUntil:
+    visible: ".*Ada Lovelace.*"
+    timeout: 10000
+- assertVisible:
+    id: badge-v2
+- assertNotVisible: ".*fullName.*"

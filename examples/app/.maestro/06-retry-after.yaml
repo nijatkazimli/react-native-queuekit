@@ -1,0 +1,21 @@
+appId: com.nijatk.queuekitlab
+name: RetryAfterError sets the wait
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: server-says-wait-retry-after
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Rate limited
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*retry 1.*"
+    timeout: 15000
+- assertVisible: ".*429 Too Many Requests.*"
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 20000

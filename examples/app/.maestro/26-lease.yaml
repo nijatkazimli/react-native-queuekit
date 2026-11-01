@@ -1,0 +1,40 @@
+appId: com.nijatk.queuekitlab
+name: Another instance takes over when the leader stops
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: leader-election-lease
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 1 Lease on
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 2 Add instance B
+- tapOn:
+    id: tab-dashboard
+- assertVisible:
+    id: badge-follower
+- tapOn:
+    id: tab-lab
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 3 Stop A
+- runFlow:
+    file: subflows/pause.yaml
+    env:
+      MS: "7000"
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: 4 Run a job
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 20000
+- assertVisible: "B \\| .*"

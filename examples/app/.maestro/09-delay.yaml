@@ -1,0 +1,20 @@
+appId: com.nijatk.queuekitlab
+name: delayMs keeps a job pending
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: delay
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Run in 5 s
+- tapOn:
+    id: tab-queue
+- assertVisible: ".*due in.*"
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 1.*"
+    timeout: 25000

@@ -1,0 +1,27 @@
+appId: com.nijatk.queuekitlab
+name: Sensitive payloads are hidden from listeners
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: sensitive-payload
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Sensitive
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Normal
+- tapOn:
+    id: tab-events
+- extendedWaitUntil:
+    visible: ".*completed 2.*"
+    timeout: 20000
+- scrollUntilVisible:
+    element: ".*hidden.*"
+    centerElement: true
+- scrollUntilVisible:
+    element: ".*1234.*"
+    centerElement: true

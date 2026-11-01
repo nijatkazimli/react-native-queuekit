@@ -1,0 +1,26 @@
+appId: com.nijatk.queuekitlab
+name: Per-type concurrency limit
+---
+- runFlow: subflows/fresh.yaml
+- runFlow:
+    file: subflows/open-test.yaml
+    env:
+      TEST: per-type-limits
+- runFlow:
+    file: subflows/press.yaml
+    env:
+      LABEL: Burst of 8
+- tapOn:
+    id: tab-dashboard
+# Jobs finish while Maestro works, so check the shape rather than an exact count.
+- extendedWaitUntil:
+    visible:
+      id: stat-active
+      text: "1"
+    timeout: 8000
+- assertNotVisible:
+    id: stat-active
+    text: "[2-9]"
+- assertVisible:
+    id: stat-pending
+    text: "[1-7]"
