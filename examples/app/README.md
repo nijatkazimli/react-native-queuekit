@@ -2,13 +2,13 @@
 
 An Expo app for trying every feature of `@nijatk/react-native-queuekit` by hand.
 
-| Tab       | What it does                                                                                                                                                                                                                                                                 |
-| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Dashboard | Stats, start/stop/flush/drain/clear, simulated offline, a restart that reloads from storage, a leader-lease lab with extra instances, background tasks                                                                                                                       |
-| Lab       | A custom `enqueue()` builder plus one card per feature: retries, backoff, `RetryAfterError`, timeouts, cancellation, generator and detached jobs, priority, delay, expiry, dedupe, `orderKey`, limits, sensitive payloads, size limit, migrations, crash recovery, retention |
-| Queue     | `useJobs()` with filters, progress, retry, remove, complete and fail for detached jobs, plus a details view with the raw stored value                                                                                                                                        |
-| Events    | Everything `queue.observe()` reports, with durations, results and errors                                                                                                                                                                                                     |
-| Settings  | Every `createQueue()` option, a backoff preview, a storage inspector and a `parseRetryAfter()` tester                                                                                                                                                                        |
+| Tab       | What it does                                                                                                                                                                                                                                             |
+| --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Dashboard | Stats, start/stop/flush/drain/clear, simulated offline, a restart that reloads from storage, a leader-lease lab with extra instances, background tasks                                                                                                   |
+| Lab       | 25 guided tests in 7 groups. Tap one to see HOW TO TEST and YOU SHOULD SEE, then press its numbered buttons in order and compare with Queue or Events. "Reset everything" gives each test a clean slate. A custom `enqueue()` builder sits at the bottom |
+| Queue     | `useJobs()` with filters, progress, retry, remove, complete and fail for detached jobs, plus a details view with the raw stored value                                                                                                                    |
+| Events    | Everything `queue.observe()` reports, with durations, results and errors                                                                                                                                                                                 |
+| Settings  | Every `createQueue()` option, a backoff preview, a storage inspector and a `parseRetryAfter()` tester                                                                                                                                                    |
 
 It uses the library from this repository (`../../dist`), so local changes show up after a rebuild.
 
