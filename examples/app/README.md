@@ -24,9 +24,27 @@ npm run web        # quick check in a browser; MMKV uses its web implementation 
 
 `npm start`, `ios`, `android` and `web` rebuild the library first. Expo Go cannot run the app because MMKV is a native module; use the development client.
 
+## End-to-end tests
+
+`.maestro/` holds [Maestro](https://maestro.mobile.dev) flows that drive the real app, one flow per Lab test plus the Dashboard, Settings, Queue and Events screens (31 in total). They run against a Release build, so the JS is bundled and no Metro server or development menu is involved.
+
+```sh
+brew install mobile-dev-inc/tap/maestro            # once (also needs Java 17+)
+npm run ios:release                                # builds and installs the Release app on a simulator
+npm run e2e                                        # runs every flow; or: maestro test .maestro/01-basic-job.yaml
+```
+
+The flows find elements by `testID` (tabs, stats, badges, buttons) and by text. Rebuild with `npm run ios:release` after changing the app, because the tests run the installed build. Three things worth knowing:
+
+- Each flow starts with a clean app state (`launchApp` with `clearState`), so flows are independent and can run alone.
+- The Events tab shows `Totals:` and `Start order:` lines, which the flows read instead of scanning the log. They are also handy by hand.
+- The `secret-looking key` warning is development only, so its flow just checks the job is enqueued. Background tasks are not covered, because iOS simulators do not support them.
+
+GitHub Actions runs the same flows on a macOS runner (`.github/workflows/e2e.yml`) on pushes to `main` that touch the library or the app, weekly, and on demand.
+
 ## Notes
 
-- Background tasks only work on a device or simulator, and the OS decides when they run. "Trigger now" on the Dashboard runs one immediately in development builds.
+- Background tasks do not run on iOS simulators (Expo skips registering them). Use a real iPhone or an Android emulator. "Trigger now" on the Dashboard runs one immediately in development builds.
 - The Lab's "Secret-looking keys" card logs a warning to the Metro console (development builds only).
 - Decorators (`@queue.handler`) are not used here because they need extra Babel setup; see the docs.
 - `npm run typecheck` checks the app against the library sources.
