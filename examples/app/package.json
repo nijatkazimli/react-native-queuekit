@@ -35,5 +35,9 @@
     "e2e": "maestro test .maestro"
   },
   "private": true,
-  "description": "Expo test app for @nijatk/react-native-queuekit"
+  "description": "Expo test app for @nijatk/react-native-queuekit",
+  "overrides": {
+    "glob": "^14.0.2",
+    "minimatch": "^11.0.1"
+  }
 }
