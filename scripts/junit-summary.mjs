@@ -1,11 +1,12 @@
 #!/usr/bin/env node
 // Turns a Maestro JUnit report into a markdown summary for the GitHub Actions job page.
-// Usage: node scripts/junit-summary.mjs report.xml >> "$GITHUB_STEP_SUMMARY"
+// Usage: node scripts/junit-summary.mjs report.xml [label] >> "$GITHUB_STEP_SUMMARY"
 import { existsSync, readFileSync } from "node:fs";
 
 const file = process.argv[2];
+const heading = `## iOS end-to-end tests${process.argv[3] ? ` (${process.argv[3]})` : ""}`;
 if (!file || !existsSync(file)) {
-  console.log("## iOS end-to-end tests\n\nNo report was produced, so the flows did not finish.");
+  console.log(`${heading}\n\nNo report was produced, so the flows did not finish.`);
   process.exit(0);
 }
 
@@ -50,7 +51,7 @@ const total = cases.reduce((sum, c) => sum + c.seconds, 0);
 const device = attr(suite, "device");
 
 const lines = [
-  "## iOS end-to-end tests",
+  heading,
   "",
   failed.length
     ? `**${failed.length} failed**, ${cases.length - failed.length} passed`

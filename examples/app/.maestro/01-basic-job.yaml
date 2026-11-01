@@ -1,5 +1,7 @@
 appId: com.nijatk.queuekitlab
 name: A job runs to the end
+tags:
+  - smoke
 ---
 - runFlow: subflows/fresh.yaml
 - runFlow:

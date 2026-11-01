@@ -1,5 +1,7 @@
 appId: com.nijatk.queuekitlab
 name: Offline jobs wait or run depending on requiresNetwork
+tags:
+  - smoke
 ---
 - runFlow: subflows/fresh.yaml
 - runFlow:

@@ -1,5 +1,7 @@
 appId: com.nijatk.queuekitlab
 name: Dashboard controls (stop, start, drain, clear, restart)
+tags:
+  - smoke
 ---
 - runFlow: subflows/fresh.yaml
 - tapOn:

@@ -1,5 +1,7 @@
 appId: com.nijatk.queuekitlab
 name: Retry with backoff
+tags:
+  - smoke
 ---
 - runFlow: subflows/fresh.yaml
 - runFlow:

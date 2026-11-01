@@ -1,5 +1,7 @@
 appId: com.nijatk.queuekitlab
 name: A job survives the app being killed
+tags:
+  - smoke
 ---
 - runFlow: subflows/fresh.yaml
 - runFlow:
