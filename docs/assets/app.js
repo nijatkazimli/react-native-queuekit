@@ -124,12 +124,21 @@
       "header",
       { className: "topbar" },
       `<button class="icon-btn menu-btn" aria-label="Menu" data-act="menu">&#9776;</button>
-       <a class="brand" href="index.html"><span class="brand-logo">Q</span>QueueKit<small>v0.1</small></a>
+       <a class="brand" href="index.html"><img class="brand-logo" src="assets/favicon.svg" alt="" width="28" height="28" />QueueKit<small id="qk-version" hidden></small></a>
        <span class="spacer"></span>
        <button class="search-btn" data-act="search"><span>Search docs</span><kbd>/</kbd></button>
        <button class="icon-btn" data-act="theme" aria-label="Toggle theme">${theme() === "dark" ? "Light" : "Dark"}</button>`,
     );
     document.body.prepend(header);
+    // Written by scripts/sync-docs-version.mjs on every release; hidden when missing (for example in a local preview).
+    fetch("assets/version.json")
+      .then((r) => r.json())
+      .then(({ version }) => {
+        const badge = document.getElementById("qk-version");
+        badge.textContent = `v${version}`;
+        badge.hidden = false;
+      })
+      .catch(() => {});
 
     const sidebar = el("nav", { className: "sidebar", ariaLabel: "Documentation" });
     let group = "";

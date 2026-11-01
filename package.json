@@ -46,6 +46,7 @@
     "format": "biome check --write",
     "docs": "node scripts/serve-docs.mjs",
     "prepublishOnly": "npm run build",
+    "version": "node scripts/sync-docs-version.mjs && git add docs/assets/version.json",
     "release": "npm run release:patch",
     "release:patch": "npm version patch && git push --follow-tags",
     "release:minor": "npm version minor && git push --follow-tags",

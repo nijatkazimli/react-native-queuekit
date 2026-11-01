@@ -108,11 +108,7 @@ kbd {
   width: 28px;
   height: 28px;
   border-radius: 8px;
-  background: linear-gradient(135deg, #5b5bd6, #22d3ee);
-  display: grid;
-  place-items: center;
-  color: #fff;
-  font-size: 15px;
+  display: block;
 }
 .brand small {
   font-weight: 500;
