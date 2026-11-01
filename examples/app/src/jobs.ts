@@ -1,5 +1,6 @@
 import type { Queue } from "@nijatk/react-native-queuekit";
 import { NonRetryableError, RetryAfterError } from "@nijatk/react-native-queuekit";
+import { simulatedNetwork } from "./network";
 
 // Rejects when the job is cancelled or times out, so a handler stops doing work.
 const sleep = (ms: number, signal: AbortSignal) =>
@@ -18,6 +19,7 @@ const sleep = (ms: number, signal: AbortSignal) =>
 
 export const JOB_TYPES = [
   "demo.success",
+  "demo.fetch",
   "demo.flaky",
   "demo.alwaysFail",
   "demo.fatal",
@@ -35,13 +37,20 @@ export const JOB_TYPES = [
 export function defineJobs(queue: Queue) {
   return {
     // Reports progress, finishes, and returns a result that observers receive on `completed`.
-    success: queue.define("demo.success", async (payload: { ms: number }, ctx) => {
+    success: queue.define("demo.success", async (payload: { ms: number; label?: string }, ctx) => {
       const steps = 10;
       for (let i = 1; i <= steps; i++) {
         await sleep(payload.ms / steps, ctx.signal);
         ctx.progress(i / steps);
       }
       return { finishedAfterAttempt: ctx.attempt };
+    }),
+
+    // Like a request that fails if the connection drops while it is in flight.
+    fetch: queue.define("demo.fetch", async (payload: { ms: number }, ctx) => {
+      await sleep(payload.ms, ctx.signal);
+      if (!simulatedNetwork.isOnline()) throw new Error("Network request failed");
+      return "response received";
     }),
 
     // Fails until `failUntil` attempts have passed: exercises retry with exponential backoff.

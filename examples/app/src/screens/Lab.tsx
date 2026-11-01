@@ -1,274 +1,489 @@
 import type { EnqueueOptions } from "@nijatk/react-native-queuekit";
 import { useState } from "react";
-import { View } from "react-native";
+import { Pressable, Text, View } from "react-native";
+import { clearLog } from "../eventLog";
 import { JOB_TYPES, OLD_PROFILE_JOB, redefineSuccess } from "../jobs";
-import { QUEUE_NAME, type Runtime, rebuildRuntime, useRuntime } from "../runtime";
+import { setForcedOffline } from "../network";
+import { QUEUE_NAME, type Runtime, rebuildRuntime, spawnFollower, useRuntime } from "../runtime";
+import { DEFAULT_SETTINGS, type Settings } from "../settings";
+import { colors } from "../theme";
 import { attempt, notify } from "../toast";
-import {
-  Body,
-  Btn,
-  Card,
-  Chip,
-  Code,
-  Heading,
-  NumberField,
-  Row,
-  Screen,
-  TextField,
-  Toggle,
-} from "../ui";
+import { Body, Btn, Card, Chip, Heading, NumberField, Row, Screen, TextField, Toggle } from "../ui";
 
-interface Scenario {
-  title: string;
-  tests: string;
-  actions: { label: string; kind?: "primary" | "ghost" | "danger"; run: (rt: Runtime) => void }[];
+interface Action {
+  label: string;
+  kind?: "primary" | "ghost" | "danger";
+  run: (rt: Runtime) => void;
 }
 
-const SCENARIOS: Scenario[] = [
+interface Test {
+  title: string;
+  proves: string;
+  steps: string[];
+  expect: string[];
+  actions: Action[];
+}
+
+const withSettings = (patch: Partial<Settings>) => (rt: Runtime) =>
+  rebuildRuntime({ ...rt.settings, ...patch });
+
+const SECTIONS: { title: string; tests: Test[] }[] = [
   {
-    title: "Progress and result",
-    tests: "define(), ctx.progress(), the handler result on the completed event (see Events).",
-    actions: [{ label: "Run 3 s job", run: ({ jobs }) => jobs.success({ ms: 3000 }) }],
-  },
-  {
-    title: "Retry with backoff",
-    tests: "Fails twice, then succeeds. Watch retry events and the growing delay.",
-    actions: [{ label: "Fail 2 times", run: ({ jobs }) => jobs.flaky({ failUntil: 2 }) }],
-  },
-  {
-    title: "Runs out of attempts",
-    tests: "maxAttempts: 2, then the job stays failed. Retry or remove it from the Queue tab.",
-    actions: [
+    title: "Basics",
+    tests: [
       {
-        label: "Always fails",
-        run: ({ jobs }) => jobs.alwaysFail({ code: 500 }, { maxAttempts: 2 }),
+        title: "A job runs to the end",
+        proves: "define(), progress, and the result of a handler.",
+        steps: ["Press Run job.", "Open Queue: watch the progress bar.", "Open Events."],
+        expect: [
+          "The bar fills in about 3 seconds, then the job disappears.",
+          "Events: started, then completed with result {finishedAfterAttempt: 1}.",
+        ],
+        actions: [
+          { label: "Run job", run: ({ jobs }) => jobs.success({ ms: 3000, label: "basic" }) },
+        ],
+      },
+      {
+        title: "Priority",
+        proves: "Jobs with a higher priority start first.",
+        steps: ["Press Add 3 jobs.", "Open Events."],
+        expect: [
+          "Events lists the newest first, so read upward: started high, then mid, then low.",
+          "The payload label shows which job it is.",
+        ],
+        actions: [
+          {
+            label: "Add 3 jobs",
+            run: ({ queue, jobs }) => {
+              queue.stop();
+              jobs.success({ ms: 1500, label: "low" }, { priority: -5 });
+              jobs.success({ ms: 1500, label: "mid" }, { priority: 0 });
+              jobs.success({ ms: 1500, label: "high" }, { priority: 10 });
+              queue.start();
+            },
+          },
+        ],
       },
     ],
   },
   {
-    title: "NonRetryableError",
-    tests: "Gives up on the first attempt, no retries.",
-    actions: [{ label: "Fatal error", run: ({ jobs }) => jobs.fatal({}) }],
-  },
-  {
-    title: "RetryAfterError",
-    tests: "The first attempt asks to wait 4 s (like HTTP 429 with Retry-After).",
-    actions: [{ label: "Rate limited", run: ({ jobs }) => jobs.retryAfter({ delayMs: 4000 }) }],
-  },
-  {
-    title: "Per-job timeout",
-    tests: "timeoutMs: 2000 on a handler that never ends. TimeoutError, then a retry.",
-    actions: [
+    title: "Retries and failures",
+    tests: [
       {
-        label: "Hang for 2 s",
-        run: ({ jobs }) => jobs.hang({}, { timeoutMs: 2000, maxAttempts: 2 }),
+        title: "Retry with backoff",
+        proves: "A failing job is retried, with a growing wait between attempts.",
+        steps: ["Press Fail twice.", "Open Events and watch for about 5 seconds."],
+        expect: [
+          "retry (Server error, attempt 1), about 1 s pause, retry again, about 2 s pause.",
+          "Then completed with result recovered on attempt 3.",
+        ],
+        actions: [{ label: "Fail twice", run: ({ jobs }) => jobs.flaky({ failUntil: 2 }) }],
+      },
+      {
+        title: "Gives up after max attempts",
+        proves: "After maxAttempts the job is kept as failed so you can retry it.",
+        steps: ["Press Always fail.", "Wait 3 seconds, open Queue.", "Press Retry on the card."],
+        expect: [
+          "The card shows failed, attempts 2/2 and the error HTTP 500.",
+          "After Retry it runs again and ends failed again.",
+        ],
+        actions: [
+          {
+            label: "Always fail",
+            run: ({ jobs }) => jobs.alwaysFail({ code: 500 }, { maxAttempts: 2 }),
+          },
+        ],
+      },
+      {
+        title: "Fatal error (no retry)",
+        proves: "NonRetryableError stops retrying at once.",
+        steps: ["Press Fatal error.", "Open Events."],
+        expect: ["started, then failed after the first attempt. There is no retry event."],
+        actions: [{ label: "Fatal error", run: ({ jobs }) => jobs.fatal({}) }],
+      },
+      {
+        title: "Server says wait (Retry-After)",
+        proves: "RetryAfterError sets the wait instead of the normal backoff.",
+        steps: ["Press Rate limited.", "Open Events and watch for 6 seconds."],
+        expect: [
+          "retry with the error 429 Too Many Requests.",
+          "The next started comes about 4 seconds later (not 1), then completed.",
+        ],
+        actions: [{ label: "Rate limited", run: ({ jobs }) => jobs.retryAfter({ delayMs: 4000 }) }],
+      },
+      {
+        title: "Timeout",
+        proves: "A job that never ends is stopped by its timeoutMs.",
+        steps: ["Press Hang (2 s timeout).", "Open Events and watch for 5 seconds."],
+        expect: ["After 2 seconds: retry with the error Job timed out after 2000ms, then failed."],
+        actions: [
+          {
+            label: "Hang (2 s timeout)",
+            run: ({ jobs }) => jobs.hang({}, { timeoutMs: 2000, maxAttempts: 2 }),
+          },
+        ],
       },
     ],
   },
   {
-    title: "Cancel a running job",
-    tests: "Runs until you remove it in the Queue tab; the handler's AbortSignal fires.",
-    actions: [
-      { label: "Start long job", run: ({ jobs }) => jobs.hang({}, { timeoutMs: 10 * 60_000 }) },
-    ],
-  },
-  {
-    title: "Generator handler",
-    tests: "An async generator: each yield is a checkpoint where cancellation is noticed.",
-    actions: [{ label: "8 chunks", run: ({ jobs }) => jobs.resumable({ chunks: 8 }) }],
-  },
-  {
-    title: "Detached native task",
-    tests: "ctx.detach(): the job stays active until you press Complete or Fail in the Queue tab.",
-    actions: [{ label: "Hand off", run: ({ jobs }) => jobs.native({ file: "video.mp4" }) }],
-  },
-  {
-    title: "Network awareness",
-    tests:
-      "Switch Simulated offline on (Dashboard) first. The first waits; the second runs anyway.",
-    actions: [
-      { label: "Needs network", run: ({ jobs }) => jobs.success({ ms: 1500 }) },
+    title: "Control",
+    tests: [
       {
-        label: "requiresNetwork: false",
-        kind: "ghost",
-        run: ({ jobs }) => jobs.success({ ms: 1500 }, { requiresNetwork: false }),
+        title: "Cancel a running job",
+        proves: "Removing a running job fires its AbortSignal.",
+        steps: [
+          "Press Start long job.",
+          "Open Queue: it is active.",
+          "Press Remove on it.",
+          "Open Events.",
+        ],
+        expect: ["Events shows removed. The job is gone and never completes."],
+        actions: [
+          { label: "Start long job", run: ({ jobs }) => jobs.hang({}, { timeoutMs: 10 * 60_000 }) },
+        ],
+      },
+      {
+        title: "Delay",
+        proves: "delayMs keeps a job pending until it is due.",
+        steps: ["Press Run in 5 s.", "Open Queue right away."],
+        expect: ["The card is pending with due in 5s counting down, then it runs."],
+        actions: [
+          {
+            label: "Run in 5 s",
+            run: ({ jobs }) => jobs.success({ ms: 1000, label: "delay" }, { delayMs: 5000 }),
+          },
+        ],
+      },
+      {
+        title: "Expiry",
+        proves: "ttlMs drops a job that has not started in time.",
+        steps: ["Press Expire first.", "Open Queue, then wait 5 seconds.", "Open Events."],
+        expect: [
+          "The card shows expires in 4s and due in 6s.",
+          "After 4 seconds it disappears. Events shows expired and no started.",
+        ],
+        actions: [
+          {
+            label: "Expire first",
+            run: ({ jobs }) =>
+              jobs.success({ ms: 1000, label: "ttl" }, { delayMs: 6000, ttlMs: 4000 }),
+          },
+        ],
+      },
+      {
+        title: "Dedupe",
+        proves: "The same dedupeKey never creates two jobs.",
+        steps: ["Press Enqueue 3 times.", "Open Queue."],
+        expect: ["A message says 3 calls created 1 job, and Queue shows a single job."],
+        actions: [
+          {
+            label: "Enqueue 3 times",
+            run: ({ jobs }) => {
+              const ids = new Set<string>();
+              for (let i = 0; i < 3; i++) {
+                ids.add(jobs.success({ ms: 4000, label: "dedupe" }, { dedupeKey: "sync" }).id);
+              }
+              notify(`3 calls created ${ids.size} job`, "ok");
+            },
+          },
+        ],
+      },
+      {
+        title: "Keep order (orderKey)",
+        proves: "Jobs sharing an orderKey run one after another, even when one fails.",
+        steps: [
+          "Press With orderKey, open Events and wait 6 seconds.",
+          "Press Without and compare.",
+        ],
+        expect: [
+          "With: step 1 fails twice first. Steps 2 and 3 start only after step 1 completes.",
+          "Without: steps 2 and 3 finish while step 1 is still retrying.",
+        ],
+        actions: [
+          {
+            label: "With orderKey",
+            run: ({ jobs }) => {
+              jobs.step({ n: 1, failFirst: 2 }, { orderKey: "chat-1" });
+              jobs.step({ n: 2, failFirst: 0 }, { orderKey: "chat-1" });
+              jobs.step({ n: 3, failFirst: 0 }, { orderKey: "chat-1" });
+            },
+          },
+          {
+            label: "Without",
+            kind: "ghost",
+            run: ({ jobs }) => {
+              jobs.step({ n: 1, failFirst: 2 });
+              jobs.step({ n: 2, failFirst: 0 });
+              jobs.step({ n: 3, failFirst: 0 });
+            },
+          },
+        ],
+      },
+      {
+        title: "Generator job",
+        proves: "An async generator reports progress and can be cancelled between steps.",
+        steps: [
+          "Press 8 chunks.",
+          "Open Queue: watch the bar.",
+          "Run it again and press Remove halfway.",
+        ],
+        expect: ["The bar moves in 8 steps over about 4 seconds. After Remove it stops at once."],
+        actions: [{ label: "8 chunks", run: ({ jobs }) => jobs.resumable({ chunks: 8 }) }],
+      },
+      {
+        title: "Hand off to a native task",
+        proves: "detach() keeps a job active until you complete or fail it.",
+        steps: [
+          "Press Hand off.",
+          "Open Queue: the card is active with an external id.",
+          "Press Complete (or Fail).",
+        ],
+        expect: [
+          "Complete: the job disappears and Events shows completed.",
+          "Fail: the job is retried like any failure.",
+        ],
+        actions: [{ label: "Hand off", run: ({ jobs }) => jobs.native({ file: "video.mp4" }) }],
       },
     ],
   },
   {
-    title: "Priority",
-    tests:
-      "Stops the queue, adds priorities -5, 0 and 10, then starts. Check the start order in Events.",
-    actions: [
+    title: "Network",
+    tests: [
       {
-        label: "Enqueue 3",
-        run: ({ queue, jobs }) => {
-          queue.stop();
-          jobs.success({ ms: 1200 }, { priority: -5, id: `low-${Date.now()}` });
-          jobs.success({ ms: 1200 }, { priority: 0, id: `mid-${Date.now()}` });
-          jobs.success({ ms: 1200 }, { priority: 10, id: `high-${Date.now()}` });
-          queue.start();
-        },
+        title: "Offline: wait or run",
+        proves: "requiresNetwork decides whether a job waits for a connection.",
+        steps: ["Press 1 Go offline.", "Press 2, then 3. Open Queue.", "Press 4 Go online."],
+        expect: [
+          "Job 2 stays pending. Job 3 (works offline) runs and completes.",
+          "After step 4 job 2 runs. You can also turn the Mac's Wi-Fi off for real.",
+        ],
+        actions: [
+          { label: "1 Go offline", kind: "ghost", run: () => setForcedOffline(true) },
+          {
+            label: "2 Needs network",
+            run: ({ jobs }) => jobs.success({ ms: 1500, label: "needs network" }),
+          },
+          {
+            label: "3 Works offline",
+            run: ({ jobs }) =>
+              jobs.success({ ms: 1500, label: "works offline" }, { requiresNetwork: false }),
+          },
+          { label: "4 Go online", kind: "ghost", run: () => setForcedOffline(false) },
+        ],
+      },
+      {
+        title: "Connection drops mid-request",
+        proves: "A drop while a request runs does not use up an attempt.",
+        steps: [
+          "Press 1 Start request (takes 6 s).",
+          "Press 2 Go offline within 6 seconds.",
+          "Wait, then press 3 Go online.",
+        ],
+        expect: [
+          "Events shows requeued (not retry) and attempts used stays 0.",
+          "After step 3 the request runs again and completes.",
+        ],
+        actions: [
+          { label: "1 Start request", run: ({ jobs }) => jobs.fetch({ ms: 6000 }) },
+          { label: "2 Go offline", kind: "ghost", run: () => setForcedOffline(true) },
+          { label: "3 Go online", kind: "ghost", run: () => setForcedOffline(false) },
+        ],
       },
     ],
   },
   {
-    title: "Delay",
-    tests: "delayMs: 5000. The job waits in pending until it is due.",
-    actions: [
-      { label: "Start in 5 s", run: ({ jobs }) => jobs.success({ ms: 1000 }, { delayMs: 5000 }) },
-    ],
-  },
-  {
-    title: "Expiry (ttlMs)",
-    tests: "Due in 6 s but expires after 4 s, so it is dropped with an expired event.",
-    actions: [
+    title: "Limits and safety",
+    tests: [
       {
-        label: "Expire before it runs",
-        run: ({ jobs }) => jobs.success({ ms: 1000 }, { delayMs: 6000, ttlMs: 4000 }),
+        title: "Per-type limits",
+        proves: "A job type can be limited to N at once and M starts per time window.",
+        steps: ["Press Burst of 8.", "Open Queue and watch for 10 seconds."],
+        expect: [
+          "Never more than 1 job active (limit: concurrency 1).",
+          "After the 3rd start, the 4th waits until 6 seconds after the 1st (limit: 3 per 6 s).",
+        ],
+        actions: [
+          {
+            label: "Burst of 8",
+            run: ({ jobs }) => {
+              for (let n = 1; n <= 8; n++) jobs.limited({ n });
+            },
+          },
+        ],
+      },
+      {
+        title: "Sensitive payload",
+        proves: "sensitive: true hides the payload and result from listeners.",
+        steps: [
+          "Press Sensitive, then Normal.",
+          "Open Events.",
+          "Open Queue and press Details on one.",
+        ],
+        expect: [
+          "Events: the sensitive job shows (hidden); the normal one shows the pin.",
+          "Details still shows the pin in storage: sensitive does not encrypt anything.",
+        ],
+        actions: [
+          {
+            label: "Sensitive",
+            run: ({ jobs }) => jobs.sensitive({ pin: "1234" }, { sensitive: true }),
+          },
+          { label: "Normal", kind: "ghost", run: ({ jobs }) => jobs.sensitive({ pin: "1234" }) },
+        ],
+      },
+      {
+        title: "Payload too large",
+        proves: "maxPayloadBytes rejects big payloads before anything is saved.",
+        steps: ["Press Enqueue too large."],
+        expect: ["A red message says the payload is over maxPayloadBytes. Queue stays empty."],
+        actions: [
+          {
+            label: "Enqueue too large",
+            kind: "danger",
+            run: ({ queue, settings }) =>
+              attempt(() =>
+                queue.enqueue("demo.success", {
+                  ms: 500,
+                  blob: "x".repeat((settings.maxPayloadBytes || 4096) + 100),
+                }),
+              ),
+          },
+        ],
+      },
+      {
+        title: "Secret in a payload",
+        proves: "A payload key like token logs a one-time warning in development.",
+        steps: ["Press apiToken in payload.", "Look at the Metro terminal."],
+        expect: [
+          "Metro prints [queuekit] ... secret-looking key apiToken. It prints once per job type.",
+        ],
+        actions: [
+          {
+            label: "apiToken in payload",
+            run: ({ queue }) => queue.enqueue("demo.success", { ms: 500, apiToken: "abc123" }),
+          },
+        ],
+      },
+      {
+        title: "Defining a job twice (strict)",
+        proves: "Re-defining a type with another handler is an error while strict is on.",
+        steps: [
+          "Press 1 Define again.",
+          "Press 2 Strict off, then 1 again.",
+          "Press 3 Strict on to restore.",
+        ],
+        expect: [
+          "Strict on: a red message says it is already defined with a different handler.",
+          "Strict off: a message says it was replaced silently.",
+        ],
+        actions: [
+          {
+            label: "1 Define again",
+            kind: "danger",
+            run: ({ queue }) =>
+              attempt(() => redefineSuccess(queue), "Replaced silently (strict is off)"),
+          },
+          { label: "2 Strict off", kind: "ghost", run: withSettings({ strict: false }) },
+          { label: "3 Strict on", kind: "ghost", run: withSettings({ strict: true }) },
+        ],
       },
     ],
   },
   {
-    title: "Dedupe",
-    tests: "Three enqueues with one dedupeKey create a single job.",
-    actions: [
+    title: "Persistence",
+    tests: [
       {
-        label: "Enqueue 3 times",
-        run: ({ jobs }) => {
-          const ids = new Set<string>();
-          for (let i = 0; i < 3; i++) ids.add(jobs.success({ ms: 4000 }, { dedupeKey: "sync" }).id);
-          notify(`3 calls created ${ids.size} job`, "ok");
-        },
+        title: "Payload migration",
+        proves: "Jobs saved by an older app version are upgraded when the queue loads.",
+        steps: ["Press Write old job and restart.", "Open Queue."],
+        expect: ["demo.profile has the payload {name: Ada Lovelace} and a v2 tag, not fullName."],
+        actions: [
+          {
+            label: "Write old job and restart",
+            run: ({ storage }) => {
+              const id = `old-${Date.now()}`;
+              storage.set(
+                `queuekit:${QUEUE_NAME}:job:${id}`,
+                JSON.stringify(OLD_PROFILE_JOB(id, "Ada Lovelace")),
+              );
+              rebuildRuntime();
+            },
+          },
+        ],
+      },
+      {
+        title: "Crash recovery",
+        proves: "A job that was running when the app died runs again on the next start.",
+        steps: [
+          "Press 1 Start long job.",
+          "Press 2 Restart queue (a simulated crash). For the real thing, force-quit the app and reopen it.",
+          "Open Queue and Events.",
+        ],
+        expect: [
+          "The job is back, the attempt count is unchanged, and Events shows a second started.",
+        ],
+        actions: [
+          {
+            label: "1 Start long job",
+            run: ({ jobs }) => jobs.hang({}, { timeoutMs: 10 * 60_000 }),
+          },
+          { label: "2 Restart queue", kind: "ghost", run: () => rebuildRuntime() },
+        ],
+      },
+      {
+        title: "Clean up failed jobs",
+        proves: "retention deletes old failed jobs so they do not pile up.",
+        steps: [
+          "Press 1 Keep 2 failed.",
+          "Press 2 Add 5 failures.",
+          "Open Events and Queue.",
+          "Press 3 when done.",
+        ],
+        expect: ["Events shows removed 3 times (the oldest). Queue keeps 2 failed jobs."],
+        actions: [
+          {
+            label: "1 Keep 2 failed",
+            kind: "ghost",
+            run: withSettings({ retentionEnabled: true, maxFailed: 2, failedTtlMs: 0 }),
+          },
+          {
+            label: "2 Add 5 failures",
+            run: ({ jobs }) => {
+              for (let i = 0; i < 5; i++) jobs.fatal({});
+            },
+          },
+          {
+            label: "3 Retention off",
+            kind: "ghost",
+            run: withSettings({ retentionEnabled: false }),
+          },
+        ],
       },
     ],
   },
   {
-    title: "Ordered chain (orderKey)",
-    tests:
-      "Step 1 fails twice. With one orderKey, steps 2 and 3 wait for it; without, they run first.",
-    actions: [
+    title: "Several instances",
+    tests: [
       {
-        label: "With orderKey",
-        run: ({ jobs }) => {
-          jobs.step({ n: 1, failFirst: 2 }, { orderKey: "chat-1" });
-          jobs.step({ n: 2, failFirst: 0 }, { orderKey: "chat-1" });
-          jobs.step({ n: 3, failFirst: 0 }, { orderKey: "chat-1" });
-        },
-      },
-      {
-        label: "Without",
-        kind: "ghost",
-        run: ({ jobs }) => {
-          jobs.step({ n: 1, failFirst: 2 });
-          jobs.step({ n: 2, failFirst: 0 });
-          jobs.step({ n: 3, failFirst: 0 });
-        },
-      },
-    ],
-  },
-  {
-    title: "Concurrency and rate limits",
-    tests: "8 jobs of a limited type: one at a time and at most 3 starts per 6 s (see Settings).",
-    actions: [
-      {
-        label: "Burst of 8",
-        run: ({ jobs }) => {
-          for (let n = 1; n <= 8; n++) jobs.limited({ n });
-        },
-      },
-    ],
-  },
-  {
-    title: "Sensitive payloads",
-    tests:
-      "The sensitive job's payload and result are hidden in Events; the other one's are shown.",
-    actions: [
-      {
-        label: "sensitive: true",
-        run: ({ jobs }) => jobs.sensitive({ pin: "1234" }, { sensitive: true }),
-      },
-      { label: "Normal", kind: "ghost", run: ({ jobs }) => jobs.sensitive({ pin: "1234" }) },
-    ],
-  },
-  {
-    title: "Payload size limit",
-    tests:
-      "A payload over maxPayloadBytes (Settings) makes enqueue() throw before saving anything.",
-    actions: [
-      {
-        label: "Enqueue too large",
-        kind: "danger",
-        run: ({ queue, settings }) =>
-          attempt(() =>
-            queue.enqueue("demo.success", {
-              ms: 500,
-              blob: "x".repeat((settings.maxPayloadBytes || 4096) + 100),
-            }),
-          ),
-      },
-    ],
-  },
-  {
-    title: "Secret-looking keys",
-    tests:
-      "A key named like a token logs a development warning (Metro console). sensitive: true silences it.",
-    actions: [
-      {
-        label: "apiToken in payload",
-        run: ({ queue }) => queue.enqueue("demo.success", { ms: 500, apiToken: "abc123" }),
-      },
-    ],
-  },
-  {
-    title: "Strict define()",
-    tests: "Defining a type twice with a different handler throws while strict is on (Settings).",
-    actions: [
-      {
-        label: "Redefine demo.success",
-        kind: "danger",
-        run: ({ queue }) =>
-          attempt(() => redefineSuccess(queue), "Replaced silently (strict is off)"),
-      },
-    ],
-  },
-  {
-    title: "Payload migration",
-    tests:
-      "Writes a version 1 job straight into storage, then restarts the queue. It loads upgraded.",
-    actions: [
-      {
-        label: "Write v1 job and restart",
-        run: ({ storage }) => {
-          const id = `old-${Date.now()}`;
-          storage.set(
-            `queuekit:${QUEUE_NAME}:job:${id}`,
-            JSON.stringify(OLD_PROFILE_JOB(id, "Ada Lovelace")),
-          );
-          rebuildRuntime();
-          notify("Check the Queue tab: payload is { name } now", "ok");
-        },
-      },
-    ],
-  },
-  {
-    title: "Crash recovery",
-    tests: "Starts a long job, then restarts the queue mid-run. The interrupted job runs again.",
-    actions: [
-      { label: "1. Start long job", run: ({ jobs }) => jobs.hang({}, { timeoutMs: 10 * 60_000 }) },
-      { label: "2. Restart queue", kind: "ghost", run: () => rebuildRuntime() },
-    ],
-  },
-  {
-    title: "Retention of failed jobs",
-    tests:
-      "Turn retention on in Settings, then add 5 failures: the oldest are deleted (removed events).",
-    actions: [
-      {
-        label: "5 failing jobs",
-        run: ({ jobs }) => {
-          for (let i = 0; i < 5; i++) jobs.fatal({});
-        },
+        title: "Leader election (lease)",
+        proves: "Instances sharing one storage elect one leader; another takes over if it stops.",
+        steps: [
+          "Press 1 Lease on, then 2 Add instance B.",
+          "Open Dashboard: A is leader, B is follower.",
+          "Press 3 Stop A and wait 4 seconds.",
+          "Press 4 Run a job and open Events.",
+        ],
+        expect: [
+          "Dashboard: B becomes the leader.",
+          "Events: the job is started by instance B (the letter shows next to the time).",
+        ],
+        actions: [
+          { label: "1 Lease on", kind: "ghost", run: withSettings({ lease: true }) },
+          { label: "2 Add instance B", kind: "ghost", run: () => spawnFollower() },
+          { label: "3 Stop A", kind: "ghost", run: ({ queue }) => queue.stop() },
+          { label: "4 Run a job", run: ({ jobs }) => jobs.success({ ms: 1500, label: "lease" }) },
+          { label: "Lease off", kind: "ghost", run: withSettings({ lease: false }) },
+        ],
       },
     ],
   },
@@ -276,6 +491,7 @@ const SCENARIOS: Scenario[] = [
 
 const PRESETS: Record<string, string> = {
   "demo.success": '{ "ms": 2000 }',
+  "demo.fetch": '{ "ms": 2000 }',
   "demo.flaky": '{ "failUntil": 2 }',
   "demo.alwaysFail": '{ "code": 503 }',
   "demo.fatal": "{}",
@@ -288,6 +504,76 @@ const PRESETS: Record<string, string> = {
   "demo.limited": '{ "n": 1 }',
   "demo.profile": '{ "name": "Grace" }',
 };
+
+function TestCard({
+  test,
+  open,
+  onToggle,
+  runtime,
+  go,
+}: Readonly<{
+  test: Test;
+  open: boolean;
+  onToggle: () => void;
+  runtime: Runtime;
+  go: (tab: string) => void;
+}>) {
+  return (
+    <Card>
+      <Pressable onPress={onToggle} style={{ gap: 2 }}>
+        <Row>
+          <Text style={{ color: colors.text, fontSize: 15, fontWeight: "700", flex: 1 }}>
+            {test.title}
+          </Text>
+          <Text style={{ color: colors.accent, fontSize: 18, fontWeight: "700" }}>
+            {open ? "-" : "+"}
+          </Text>
+        </Row>
+        <Text style={{ color: colors.muted, fontSize: 12 }}>{test.proves}</Text>
+      </Pressable>
+      {open ? (
+        <View style={{ gap: 10 }}>
+          <View style={{ gap: 3 }}>
+            <Text style={{ color: colors.accent, fontSize: 12, fontWeight: "700" }}>
+              HOW TO TEST
+            </Text>
+            {test.steps.map((step, i) => (
+              <Text key={step} style={{ color: colors.text, fontSize: 13 }}>
+                {i + 1}. {step}
+              </Text>
+            ))}
+          </View>
+          <View style={{ gap: 3 }}>
+            <Text style={{ color: colors.ok, fontSize: 12, fontWeight: "700" }}>
+              YOU SHOULD SEE
+            </Text>
+            {test.expect.map((line) => (
+              <Text key={line} style={{ color: colors.text, fontSize: 13 }}>
+                - {line}
+              </Text>
+            ))}
+          </View>
+          <Row wrap>
+            {test.actions.map((action) => (
+              <Btn
+                key={action.label}
+                label={action.label}
+                kind={action.kind ?? "primary"}
+                small
+                onPress={() => attempt(() => action.run(runtime))}
+              />
+            ))}
+          </Row>
+          <Row wrap>
+            <Btn label="Open Queue" small kind="ghost" onPress={() => go("queue")} />
+            <Btn label="Open Events" small kind="ghost" onPress={() => go("events")} />
+            <Btn label="Open Dashboard" small kind="ghost" onPress={() => go("dashboard")} />
+          </Row>
+        </View>
+      ) : null}
+    </Card>
+  );
+}
 
 function CustomJob({ runtime }: Readonly<{ runtime: Runtime }>) {
   const [type, setType] = useState<string>(JOB_TYPES[0]);
@@ -322,10 +608,7 @@ function CustomJob({ runtime }: Readonly<{ runtime: Runtime }>) {
   };
 
   return (
-    <Card
-      title="Custom job"
-      hint="Builds any enqueue() call by hand: pick a type, edit the payload, set options. 0 or empty means not set."
-    >
+    <View style={{ gap: 10 }}>
       <Row wrap>
         {JOB_TYPES.map((name) => (
           <Chip
@@ -363,35 +646,68 @@ function CustomJob({ runtime }: Readonly<{ runtime: Runtime }>) {
       <Toggle label="requiresNetwork" value={requiresNetwork} onChange={setRequiresNetwork} />
       <Toggle label="sensitive" value={sensitive} onChange={setSensitive} />
       <Btn label={`queue.enqueue("${type}", ...)`} onPress={enqueue} />
-    </Card>
+    </View>
   );
 }
 
-export function LabScreen() {
+export function LabScreen({ go }: Readonly<{ go: (tab: string) => void }>) {
   const runtime = useRuntime();
+  const [open, setOpen] = useState<string | undefined>();
+  const [custom, setCustom] = useState(false);
+
+  const reset = () => {
+    setForcedOffline(false);
+    runtime.queue.clear();
+    runtime.storage.clearAll();
+    clearLog();
+    rebuildRuntime(DEFAULT_SETTINGS);
+    notify("Clean slate: jobs, log and settings reset", "ok");
+  };
+
   return (
     <Screen>
       <Heading>Lab</Heading>
-      <Body muted>
-        Every card exercises one feature. Watch the result in the Queue and Events tabs.
-      </Body>
-      <CustomJob runtime={runtime} />
-      {SCENARIOS.map((scenario) => (
-        <Card key={scenario.title} title={scenario.title} hint={scenario.tests}>
-          <Row wrap>
-            {scenario.actions.map((action) => (
-              <Btn
-                key={action.label}
-                label={action.label}
-                kind={action.kind ?? "primary"}
-                small
-                onPress={() => attempt(() => action.run(runtime))}
-              />
-            ))}
-          </Row>
-        </Card>
+      <Card title="How to use this tab">
+        <Body>
+          1. Tap a test to open it. 2. Press its buttons in order. 3. Open Queue or Events and
+          compare with "You should see".
+        </Body>
+        <Body muted>Start each test from a clean slate. Events lists the newest first.</Body>
+        <Btn label="Reset everything" small kind="danger" onPress={reset} />
+      </Card>
+
+      {SECTIONS.map((section) => (
+        <View key={section.title} style={{ gap: 10 }}>
+          <Text style={{ color: colors.muted, fontSize: 13, fontWeight: "800", marginTop: 6 }}>
+            {section.title.toUpperCase()}
+          </Text>
+          {section.tests.map((test) => (
+            <TestCard
+              key={test.title}
+              test={test}
+              open={open === test.title}
+              onToggle={() => setOpen(open === test.title ? undefined : test.title)}
+              runtime={runtime}
+              go={go}
+            />
+          ))}
+        </View>
       ))}
-      <Code>{`createQueue({ name: "${QUEUE_NAME}", ... })`}</Code>
+
+      <Card
+        title="Advanced: build your own job"
+        hint="Any enqueue() call by hand. 0 or empty means not set."
+        right={
+          <Btn
+            label={custom ? "Hide" : "Show"}
+            small
+            kind="ghost"
+            onPress={() => setCustom(!custom)}
+          />
+        }
+      >
+        {custom ? <CustomJob runtime={runtime} /> : null}
+      </Card>
     </Screen>
   );
 }

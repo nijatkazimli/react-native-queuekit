@@ -13,7 +13,11 @@ import { SettingsScreen } from "./src/screens/Settings";
 import { colors } from "./src/theme";
 import { useToast } from "./src/toast";
 
-const TABS: { id: string; label: string; screen: () => ReactElement }[] = [
+const TABS: {
+  id: string;
+  label: string;
+  screen: (props: { go: (tab: string) => void }) => ReactElement;
+}[] = [
   { id: "dashboard", label: "Dashboard", screen: DashboardScreen },
   { id: "lab", label: "Lab", screen: LabScreen },
   { id: "queue", label: "Queue", screen: QueueScreen },
@@ -97,7 +101,7 @@ function Shell() {
         {/* Every tab stays mounted so typed input and scroll position survive switching. */}
         {TABS.map(({ id, screen: Tab }) => (
           <View key={id} style={{ flex: 1, display: active === id ? "flex" : "none" }}>
-            <Tab />
+            <Tab go={setActive} />
           </View>
         ))}
         <TabBar active={active} onSelect={setActive} />
